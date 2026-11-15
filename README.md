@@ -4,6 +4,8 @@
 
 ChorusDuplex builds synthetic Mandarin conversations between a voice assistant and multiple people. It captures who is talking, whom they are addressing, what prompted each reply, and when an assistant should speak or listen. Each delivery pairs clean audio with a background-speech version and includes a script and the timing measured from the rendered audio.
 
+Listen to [an incomplete-turn excerpt](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/resolve/main/demos/incomplete-preview.wav) or [two users interrupting simultaneously](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/resolve/main/demos/simultaneous-interruption.wav). The first link plays the short excerpt around the pause.
+
 ## Participation and addressees
 
 The design follows the distinction between participation and address. Being present in a group conversation still leaves room for two other people to address each other.
@@ -31,7 +33,7 @@ These are design targets. They also cover newcomers, turn coordination and groun
 
 ## How the scripts vary
 
-The dialogue index cycles through 15 topic domains. Seeded sampling varies the one to six users, relationships, settings, target turn counts and human voice assignments. The script model writes the particular situation, personas and wording. The assistant has a fixed MOSS voice across dialogues. Optional reference recordings expand the human voice pool.
+The dialogue index cycles through 15 topic domains. Seeded sampling varies the one to six users, relationships, settings, target turn counts and human voice assignments. The script model writes the particular situation, personas and wording. The assistant has a fixed MOSS voice across dialogues. Optional reference recordings expand the human voice pool. The built-in pool has five human voices. With six users and one third party, supply at least two additional distinct reference voices to avoid reusing a voice.
 
 The scenario plan samples incomplete turns, backchannels, interruptions and side talk independently at 40%, 60%, 27% and 25%, with a curated first case. Group events require enough participants. The prompt includes the rules for the selected events, and validation checks the required structure and references. These are planning probabilities. Script and audio rejection can change the delivered distribution.
 
