@@ -70,7 +70,18 @@ def render(d, synth, clean, timeline_path):
             else:
                 start = cursor + round(t["gap_before_ms"]*SAMPLE_RATE/1000)
             listeners = 0
-            if kind == "incomplete":
+            if kind == "interruption" and "backchannel_prefix" in t:
+                prefix = t["backchannel_prefix"]
+                reply = content[len(prefix):].lstrip(" ，,。；;、：:…")
+                offset_db = round(backchannel_gain.uniform(-10.0, -3.0), 1)
+                lead = synth.line(prefix, voice, offset_db)
+                takeover = host_start + len(host_wave)
+                start = takeover - len(lead)
+                if start <= host_start:
+                    raise ValueError("主轮过短，无法在打断前放置附和")
+                wave = np.concatenate((lead, synth.line(reply, voice)))
+                timing.update(backchannel_prefix=prefix, takeover_sec=takeover / SAMPLE_RATE)
+            elif kind == "incomplete":
                 head = synth.line(t["parts"][0], voice)
                 pause = round(t["pause_ms"] * SAMPLE_RATE / 1000)
                 if t.get("resolution") == "assistant_handoff":

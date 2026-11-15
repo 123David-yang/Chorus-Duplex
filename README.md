@@ -30,7 +30,8 @@ These are design targets. They also cover newcomers, turn coordination and groun
 | Backchannel, `backchannel` | A listener acknowledges something already said while the main speaker continues. |
 | Simultaneous or consecutive backchannels | Two listeners acknowledge the same point together or in quick succession, each with their own voice and timing. |
 | Interruption, `interruption` | A speaker takes the floor during an unfinished turn, reacting to something already audible. |
-| Simultaneous or successive interruptions | Two users interrupt the same speaker, or user A interrupts the assistant, the assistant responds, and user B interrupts the follow-up. |
+| Simultaneous interruptions | Two users interrupt the same turn. |
+| Backchannel-to-interruption | A user starts with a brief acknowledgement while the assistant keeps speaking. The assistant stops at a pivot such as “but” or “wait.” Each new interrupted turn counts as a separate event. |
 | Third-party speech, `side_talk` | A third party speaks briefly in a side exchange before the participants return to the main thread. |
 
 **Hesitation handoff** · After a user trails off mid-thought, the assistant waits 2.5–3.2 seconds and gently offers a suggestion based on what it heard. The user turn is marked `incomplete` with `resolution: assistant_handoff`. The assistant reply is a separate turn linked to the user.
@@ -45,7 +46,8 @@ These are design targets. They also cover newcomers, turn coordination and groun
 | **Backchannel** | ✓ | ✓ | ✓ |
 | ↳ Multiple listeners | — | — | ✓ |
 | **Interruption** | ✓ | ✓ | ✓ |
-| ↳ Simultaneous or successive | — | — | ✓ |
+| ↳ Simultaneous interruption | — | — | ✓ |
+| ↳ Backchannel-to-interruption | — | — | ✓ |
 | **Incomplete turn** | ✓ | — | ✓ |
 | ↳ Hesitation handoff | — | — | ✓ |
 | Third-party exchange | ✓ | — | ✓ |
