@@ -4,11 +4,52 @@ ChorusDuplex generates synthetic Mandarin multi-party duplex dialogue with MOSS-
 
 [Dataset, documentation, and audio previews on Hugging Face](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk)
 
-## Dialogue design
+## 多人双工设计
 
-The script generator selects interactions to suit each scenario. A listener can acknowledge an ongoing turn without taking the floor, or interrupt and redirect the exchange. Multiple listeners can acknowledge the same turn together or successively. Multiple users can interrupt the same turn, or interrupt different assistant turns in a sequence. Incomplete turns use a 0.5–2 second mid-thought pause before the same speaker continues. A brief third-party exchange can sit within the main discussion.
+ChorusDuplex 用合成语音构造多人会话，记录谁在说、对谁说、根据哪一轮回应，以及助手什么时候该介入。早期设计把场景分成三类：
 
-The assistant uses the built-in Junhao voice. Other speakers can use built-in voices or licensed reference clips. The dataset card describes the publicly available audio and shows selected pilot examples.
+| 场景 | 助手的参与方式 |
+|---|---|
+| 参与型 | 用户向助手提问，或邀请助手把多人意见整理成建议。 |
+| 非参与型 | 用户之间或与第三方有自己的交流，指向和旁听信息可以用来区分助手何时保持安静。 |
+| 社交过渡 | 助手可用短附和表明在听，完整回答留给明确需要它的时机。 |
+
+`speaker` 记录说话人，`addressee` 记录发言指向，可指向一人或多人。用 `responds_to` 标出依赖的早先轮次。剧本中的回应、他人姓名和安排应根据对话中已经提供的信息。
+
+| 互动 | 示例与标注 |
+|---|---|
+| 普通接话 | 前一轮结束后接话，`speech`。 |
+| 未完成 | 说到一半停 0.5–2 秒，随后同一人续说，`incomplete` 带 `parts` 和 `pause_ms`。 |
+| 单人附和 | 听众简短回应，主轮继续，`backchannel`。 |
+| 同时或连续附和 | 多人回应同一主轮中的事实，各有自己的音色和时刻。 |
+| 打断 | 用户在原轮结束前接过话轮，`interruption`。 |
+| 同时或连续打断 | 两人抢同一个话轮，或者 A 打断助手，助手回应，B 再打断补充。 |
+| 第三方插话 | 第三方参与短交流后主线恢复，第三方发言标作 `side_talk`。 |
+
+## 合成与交付
+
+```text
+场景和音色采样
+    → LLM 剧本和因果引用校验
+    → MOSS ONNX 逐轮合成、VAD 和响度处理
+    → 排布停顿、重叠和双声道
+    → VOiCES 人声混音
+    → 干声、背景声、时间线、标注及完成记录
+```
+
+剧本记录计划中的相对间隔，时间线记录实际合成后的 `start_sec`、`end_sec` 和重叠。主持事实的 `anchor_text` 用于放置附和。同一话轮上的多人事件各自有独立记录，便于分析多人语音活动和助手介入时机。
+
+```text
+annotations.jsonl
+audio/
+  <dialogue_id>.flac
+  <dialogue_id>_babble.flac
+  <dialogue_id>.timeline.json
+```
+
+本地运行生成 `status.json` 和 `events.jsonl`。有效时长按已交付的干声计入，背景声是同一对话的配对版本。
+
+公开数据可用于研究多说话人话轮切换、打断和附和识别，以及助手发言时机。数据集卡片提供样本试听、下载和来源信息。[Hugging Face 数据集与试听](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk)
 
 ## Run locally
 
