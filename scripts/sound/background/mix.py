@@ -101,8 +101,10 @@ def mix(dialogue_path: str | Path, background_path: str | Path,
 
     # 淡入淡出（首尾 50ms）防爆音
     fade = int(0.05 * sample_rate)
-    b_scaled[:fade] *= np.linspace(0, 1, fade)
-    b_scaled[-fade:] *= np.linspace(1, 0, fade)
+    fade = min(fade, len(b_scaled) // 2)
+    if fade:
+        b_scaled[:fade] *= np.linspace(0, 1, fade)
+        b_scaled[-fade:] *= np.linspace(1, 0, fade)
 
     # 混入非 assistant 侧（双声道：左声道；单声道：整轨）；防削波：峰值压到 0.95
     if d.ndim > 1:

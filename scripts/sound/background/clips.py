@@ -36,8 +36,10 @@ def stitch_clips(clip_dir: str | Path, out_path: str | Path, duration: float,
         c, sr = sf.read(str(rng.choice(clips)), dtype="float32")
         if c.ndim > 1:
             c = c.mean(axis=1)
+        if not len(c):
+            raise ValueError("Background clip has no samples.")
         if sr != sample_rate:  # 统一到目标采样率（如 VOiCES 16k → 48k）
-            n = int(len(c) * sample_rate / sr)
+            n = max(1, int(len(c) * sample_rate / sr))
             c = np.interp(np.linspace(0, len(c) - 1, n), np.arange(len(c)), c).astype(np.float32)
         # 逐片段响度规整（不同拾音位置本征音量差可达十几 dB：隔墙 vs 桌面）
         r = float(np.sqrt((c ** 2).mean()))
@@ -49,7 +51,7 @@ def stitch_clips(clip_dir: str | Path, out_path: str | Path, duration: float,
         if len(buf) == 0:
             buf = c
             continue
-        n = min(xfade, len(c), len(buf))
+        n = min(xfade, len(c) // 2, len(buf))
         if n > 1:  # 交叉淡化接缝
             buf[-n:] = buf[-n:] * (1 - ramp[:n]) + c[:n] * ramp[:n]
             buf = np.concatenate([buf, c[n:]])

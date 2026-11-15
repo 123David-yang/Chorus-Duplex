@@ -7,7 +7,7 @@ class ChineseFrontend:
     def __init__(self,folder):
         folder=Path(folder);folder.mkdir(parents=True,exist_ok=True)
         self.log=(folder/("g2p-"+uuid.uuid4().hex+".stderr.log")).open("x",encoding="utf-8")
-        self.process=subprocess.Popen([sys.executable,"-m","scripts.sound.synthesis.kokoro_frontend_worker"],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=self.log,
+        self.process=subprocess.Popen([sys.executable,"-X","utf8","-m","scripts.sound.synthesis.kokoro_frontend_worker"],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=self.log,
               text=True,encoding="utf-8",bufsize=1,creationflags=subprocess.CREATE_NO_WINDOW if os.name=="nt" else 0)
         self.responses=queue.Queue()
         def reader():

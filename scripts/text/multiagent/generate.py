@@ -146,8 +146,11 @@ def speak(d: Dialogue, sched: Scheduler, pid: str, mock: bool, rng: random.Rando
     host=next((i for i in range(len(d.turns)-1,-1,-1) if d.turns[i].kind!="backchannel"),None)
     gap=-450 if kind=="interruption" else 250
     if mock:
-        text="嗯嗯" if kind=="backchannel" else "我们接着讨论周末安排，先确认时间和预算。"
-        obj={"text":text,"responds_to":[host] if host is not None else []}
+        text = "嗯嗯" if kind == "backchannel" else "我们接着讨论周末安排，先确认时间和预算。"
+        obj = {"text": text, "responds_to": [host] if host is not None else []}
+        if kind == "backchannel" and host is not None:
+            # The mock host uses a fixed first clause followed by a second clause.
+            obj["anchor_text"] = d.turns[host].text.partition("，")[0]
     else:
         own=_desc(d,pid)
         system=("当前轮的 speaker/addressee 是强制元数据，你就是 speaker，不能回答别人被问的问题。assistant 是提供帮助的 AI，不编造看电影、订票等亲身生活经历；可谈作品和提供建议。每轮最多两句短口语。你只扮演当前说话人。只输出 JSON 对象，必须含 text（字符串）、responds_to（整数数组）。不要输出 schema 或解释。别人的私有人设不对你公开，禁止替别人说话。\n"
