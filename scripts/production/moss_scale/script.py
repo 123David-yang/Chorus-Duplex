@@ -103,6 +103,12 @@ kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去�
             system += "\n连续附和：同一位用户先后两次简短表示认同。写成两个独立短反馈，措辞有自然变化，两句之间有短间隔。"
         else:
             system += "\n连续附和：两位不同用户先后表示认同，第二位等第一位说完再开口。"
+    if group:
+        system += (
+            "\n必做的一组附和要紧跟助手的 speech，回复对象必须是 assistant。"
+            "两条 responds_to 都只填该助手轮索引，anchor_text 都逐字复制同一个已说出的短前缀。"
+            "首轮 responds_to 用空数组 []，所有引用索引都用 JSON 数组。"
+        )
     if backchannel_to_interruption:
         system += (
             "\n安排恰好一处附和转打断。助手先给出一个可认可的具体信息，再继续说，直到被打断。"
@@ -122,7 +128,7 @@ kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去�
         raw = chat(system, json.dumps(request, ensure_ascii=False), temperature=.95, max_tokens=7000)
         try:
             d = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
-            if hesitation_handoff or backchannel_to_interruption:
+            if hesitation_handoff or backchannel_to_interruption or group:
                 for turn in d["turns"]:
                     refs = turn["responds_to"]
                     if refs is None:
