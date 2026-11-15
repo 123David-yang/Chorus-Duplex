@@ -39,18 +39,20 @@ These are design targets. They also cover newcomers, turn coordination and groun
 
 | Feature | Full-Duplex-Bench | MultiTalkFT | ChorusDuplex |
 | --- | :---: | :---: | :---: |
-| Multi-party dialogue | One-to-one | ✓ | ✓ |
+| Multi-party dialogue | ✗ | ✓ | ✓ |
 | **Backchannel** | ✓ | ✓ | ✓ |
-| ↳ Multiple listeners | Unspecified | Unspecified | ✓ |
+| ↳ Multiple listeners | — | — | ✓ |
 | **Interruption** | ✓ | ✓ | ✓ |
-| ↳ Simultaneous or successive | Unspecified | Unspecified | ✓ |
-| **Incomplete turn** | ✓ | Silence turns | ✓ |
-| ↳ Two annotated fragments | Unspecified | Unspecified | ✓ |
-| ↳ Resume with a filler | Unspecified | Unspecified | ✓ |
-| Third-party exchange | ✓ | Addressee shifts | ✓ |
-| Paired background speech | ✓ | Pairing undocumented | ✓ |
+| ↳ Simultaneous or successive | — | — | ✓ |
+| **Incomplete turn** | ✓ | — | ✓ |
+| ↳ Two annotated fragments | — | — | ✓ |
+| ↳ Resume with a filler | — | — | ✓ |
+| Third-party exchange | ✓ | — | ✓ |
+| Paired background speech | ✓ | — | ✓ |
 
-✓ marks documented support. Unspecified means the public materials do not list a dedicated type. The comparison covers Full-Duplex-Bench v1.0 and v1.5, and the ChorusDuplex generator and schema.
+✓ Supported · — Unclear from public sources · ✗ Explicitly unsupported
+
+Scope includes Full-Duplex-Bench v1.0/v1.5, MultiTalkFT, and the ChorusDuplex generator.
 
 ChorusDuplex places short acknowledgements relative to the words already audible on the host turn. It records conversational side talk as a speaker turn and adds room chatter as a separate acoustic condition. This lets researchers study whom the assistant should respond to with or without competing voices in the room.
 
