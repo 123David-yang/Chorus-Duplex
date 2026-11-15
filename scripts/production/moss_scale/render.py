@@ -1,5 +1,6 @@
 """Synthesize MOSS speech and place turns on the stereo timeline."""
 import os
+import random
 
 import numpy as np
 import soundfile as sf
@@ -37,15 +38,22 @@ class FastSynth(DialogueSynth):
 def render(d, synth, clean, timeline_path):
     turns = d["turns"]
     voices = d["profile"]["voice_assignments"]
+    backchannel_gain = random.Random(f"backchannel-gain:{d.get('dialogue_id', 'preview')}")
     placed, timeline = [], []
     cursor = host_end = boundary = listeners = 0
     for i, t in enumerate(turns):
         speaker, content, kind = t["speaker"], t["text"], t["kind"]
         voice = voices[speaker]
         timing = {}
+        hold_frames = 0
         if kind == "backchannel":
-            wave = synth.line(content, voice, -3)
-            start = boundary + int((.08 + d["profile"].get("listener_spacing_ms",120)/1000 * listeners) * SAMPLE_RATE)
+            offset_db = round(backchannel_gain.uniform(-10.0, -3.0), 1)
+            wave = synth.line(content, voice, offset_db)
+            spacing = d["profile"].get("listener_spacing_ms", 120)
+            start = boundary + int((.08 + spacing / 1000 * listeners) * SAMPLE_RATE)
+            if listeners and d["profile"].get("listener_sequence") == "sequential":
+                _, previous_start, previous_wave = placed[-1]
+                start = previous_start + len(previous_wave) + round(spacing * SAMPLE_RATE / 1000)
             if start >= host_end:
                 raise ValueError("附和开始时主轮已结束")
             timing.update(host_turn_id=t["responds_to"][0], anchor_boundary_sec=boundary/SAMPLE_RATE)
@@ -63,9 +71,15 @@ def render(d, synth, clean, timeline_path):
                 start = cursor + round(t["gap_before_ms"]*SAMPLE_RATE/1000)
             listeners = 0
             if kind == "incomplete":
-                head, tail = [synth.line(part, voice) for part in t["parts"]]
-                pause = round(t["pause_ms"]*SAMPLE_RATE/1000)
-                wave = np.concatenate((head, np.zeros(pause, dtype=np.float32), tail))
+                head = synth.line(t["parts"][0], voice)
+                pause = round(t["pause_ms"] * SAMPLE_RATE / 1000)
+                if t.get("resolution") == "assistant_handoff":
+                    wave = head
+                    hold_frames = pause
+                    timing["resolution"] = "assistant_handoff"
+                else:
+                    tail = synth.line(t["parts"][1], voice)
+                    wave = np.concatenate((head, np.zeros(pause, dtype=np.float32), tail))
                 timing.update(pause_start_sec=(start+len(head))/SAMPLE_RATE,
                               pause_end_sec=(start+len(head)+pause)/SAMPLE_RATE)
             elif upcoming.get("kind") == "backchannel":
@@ -85,7 +99,7 @@ def render(d, synth, clean, timeline_path):
             t["gap_before_ms"] = round((start - (placed[-1][1] + len(placed[-1][2]))) * 1000 / SAMPLE_RATE)
         if any(s==speaker and start<at+len(a) and at<end for s,at,a in placed):
             raise ValueError(f"同一说话人重叠，轮次 {i}")
-        cursor = max(cursor, end)
+        cursor = max(cursor, end + hold_frames)
         placed.append((speaker,start,wave))
         timeline.append({k:t[k] for k in ("turn_id","speaker","kind","addressee","text")} |
                         {"start_sec":start/SAMPLE_RATE,"end_sec":end/SAMPLE_RATE,

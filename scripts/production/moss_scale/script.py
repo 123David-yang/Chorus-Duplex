@@ -9,14 +9,48 @@ from scripts.text.voices import gender_of, reference_voices, voices_for_dialogue
 from .storage import atomic_json
 
 
+SELF_RESUME_PAUSE_MS = (500, 2000)
+HANDOFF_PAUSE_MS = (2500, 3200)
+
+
+def incomplete_pause_range(turn):
+    return HANDOFF_PAUSE_MS if turn.get("resolution") == "assistant_handoff" else SELF_RESUME_PAUSE_MS
+
+
+class BackchannelTooLong(ValueError):
+    """A validly referenced acknowledgement needs shorter wording."""
+
+
+def shorten_backchannels(draft):
+    turns = draft["turns"]
+    candidates = {
+        str(i): {"原文": turn["text"], "已听到的内容": turn["anchor_text"]}
+        for i, turn in enumerate(turns)
+        if turn["kind"] == "backchannel" and isinstance(turn["text"], str) and len(turn["text"]) > 14
+    }
+    raw = chat(
+        "把每条附和缩为2到14字符的自然短反馈，保留原语气。不要添加观点。只返回JSON对象，键保持轮次编号，值为缩短后的文字。",
+        json.dumps(candidates, ensure_ascii=False), temperature=.3, max_tokens=500,
+    )
+    corrections = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
+    if not isinstance(corrections, dict) or set(corrections) != set(candidates):
+        raise ValueError("附和修订的轮次编号不匹配")
+    if any(not isinstance(value, str) or not 2 <= len(value.strip()) <= 14 for value in corrections.values()):
+        raise ValueError("附和修订须为2至14字符")
+    for index, text in corrections.items():
+        turns[int(index)]["text"] = text.strip()
+
+
 def generate(index, root):
     ident = f"moss-scale-20261115-{index:06d}"
     path = root / "scripts" / f"{ident}.json"
     if path.exists():
         draft = json.loads(path.read_text(encoding="utf-8"))
         for turn in draft["turns"]:
-            if turn["kind"] == "incomplete" and not 500 <= turn["pause_ms"] <= 2000:
-                turn["pause_ms"] = random.Random(f"{ident}-{turn['turn_id']}-pause").randint(500, 2000)
+            if turn["kind"] == "incomplete":
+                low, high = incomplete_pause_range(turn)
+                if not low <= turn["pause_ms"] <= high:
+                    turn["pause_ms"] = random.Random(f"{ident}-{turn['turn_id']}-pause").randint(low, high)
         return draft
     rng = random.Random(index + 20261115)
     count = 3 if index == 0 else rng.choices(range(1, 7), [1, 3, 3, 3, 2, 1])[0]
@@ -31,6 +65,9 @@ def generate(index, root):
     group = count >= 2 and "backchannel" in events and (index == 0 or rng.random() < .35)
     group_interrupt = count >= 2 and "interruption" in events and rng.random() < .35
     interruption_chain = count >= 2 and "interruption" in events and not group_interrupt and rng.random() < .30
+    hesitation_handoff = index != 0 and "incomplete" in events and random.Random(
+        f"{ident}-hesitation-handoff"
+    ).random() < .25
     system = """写一段自然的中文多人对话，仅输出 JSON 对象，字段 setting、topic、participants、turns。
 participants 中每个人含 id、persona、style。turns 每项含 speaker、text、addressee、kind、responds_to。
 kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去轮次索引，从0开始。
@@ -43,7 +80,17 @@ kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去�
         "side_talk": "side_talk 由 third_party_01 说出，插在中段，前面有正式成员开口搭话且后续自然返回主线。第三方不进入 participants。",
     }
     for event in events:
-        system += "\n" + event_rules[event]
+        if event == "incomplete" and hesitation_handoff:
+            system += (
+                "\n本条用犹豫接话实现 incomplete。让一位用户说到一半迟疑，例如“我本来想明天先去那个”，"
+                "不用句号收尾。把该轮设为 kind=incomplete、resolution=assistant_handoff，"
+                "parts 只含一个与 text 相同的发声片段。下一轮必须是 assistant 的 speech，"
+                "addressee 只指这位用户，responds_to 只引该未完成轮。中间不要写静音轮。"
+                "助手等待较长停顿后，按用户已经说出的需求温和地提出建议或给一个选项，"
+                "例如“没关系，我先给你个思路，你看合不合适。”措辞按情境变化，避免催促或猜测没说出的信息。"
+            )
+        else:
+            system += "\n" + event_rules[event]
     request = {
         "领域": TOPIC_DOMAINS[index % len(TOPIC_DOMAINS)],
         "关系": rng.choice(["邻居", "同事", "老朋友", "家人", "临时组队"]),
@@ -56,7 +103,13 @@ kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去�
         raw = chat(system, json.dumps(request, ensure_ascii=False), temperature=.95, max_tokens=7000)
         try:
             d = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
-            validate(d, users, events, group, group_interrupt, interruption_chain)
+            try:
+                validate(d, users, events, group, group_interrupt, interruption_chain, hesitation_handoff=hesitation_handoff)
+            except BackchannelTooLong:
+                if attempt:
+                    raise
+                shorten_backchannels(d)
+                validate(d, users, events, group, group_interrupt, interruption_chain, hesitation_handoff=hesitation_handoff)
             break
         except (ValueError, KeyError, TypeError) as exc:
             (root/"staging"/f"{ident}-text-reject-{attempt}.txt").write_text(raw,encoding="utf-8")
@@ -69,8 +122,10 @@ kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去�
     for i, t in enumerate(d["turns"]):
         t.update(turn_id=i, gap_before_ms=-350 if t["kind"]=="interruption" else rng.randint(140, 320),
                  insert_ratio=None, events=[], trigger="cue" if t["speaker"]=="assistant" else None)
-        if t["kind"]=="incomplete":
-            t["pause_ms"] = rng.randint(500, 2000)
+        if t["kind"] == "incomplete":
+            t["pause_ms"] = rng.randint(*incomplete_pause_range(t))
+        if i and d["turns"][i-1].get("resolution") == "assistant_handoff":
+            t["gap_before_ms"] = 0
     spoken = {t["speaker"] for t in d["turns"]}
     voices = {k:v for k,v in mapping.items() if k in spoken}
     refs = reference_voices()
@@ -78,12 +133,13 @@ kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去�
                     "voice_references":{v:{k:refs[v][k] for k in ("source_url","license","sha256")}
                                         for v in voices.values() if v in refs},
                     "topic_domain":request["领域"],"requested_events":events,
-                    "listener_spacing_ms":0 if simultaneous else rng.randint(350, 650)}
+                    "listener_spacing_ms":0 if simultaneous else rng.randint(90, 180),
+                    "listener_sequence":"simultaneous" if simultaneous else "sequential"}
     atomic_json(path, d)
     return d
 
 
-def validate(d, users, events, group, group_interrupt=False, interruption_chain=False):
+def validate(d, users, events, group, group_interrupt=False, interruption_chain=False, *, hesitation_handoff=False):
     turns = d["turns"]
     allowed = set(users) | {"assistant", "third_party_01"}
     if not 10 <= len(turns) <= 37:
@@ -106,6 +162,7 @@ def validate(d, users, events, group, group_interrupt=False, interruption_chain=
     listeners = set()
     assistant_group = False
     interrupt_group = False
+    handoffs = 0
     interrupters = set()
     for i, t in enumerate(turns):
         speaker, kind, content = t["speaker"], t["kind"], t["text"]
@@ -117,10 +174,25 @@ def validate(d, users, events, group, group_interrupt=False, interruption_chain=
             raise ValueError(f"第{i}轮角色、文本、指向或回应索引无效")
         if (speaker=="third_party_01") != (kind=="side_talk"):
             raise ValueError("第三方须标作 side_talk")
-        if kind=="incomplete":
-            parts=t["parts"]
-            if not isinstance(parts,list) or len(parts)!=2 or any(not isinstance(x,str) or not x.strip() for x in parts) or "".join(parts)!=content or parts[0].rstrip().endswith(("。","？","！","?","!")):
-                raise ValueError("incomplete 需要两个与正文一致的发声片段")
+        resolution = t.get("resolution")
+        if resolution is not None and (kind != "incomplete" or resolution != "assistant_handoff"):
+            raise ValueError("未识别的话轮 resolution")
+        if kind == "incomplete":
+            handoff = resolution == "assistant_handoff"
+            parts = t["parts"]
+            expected_parts = 1 if handoff else 2
+            if (not isinstance(parts, list) or len(parts) != expected_parts
+                or any(not isinstance(part, str) or not part.strip() for part in parts)
+                or "".join(parts) != content or parts[0].rstrip().endswith(("。", "？", "！", "?", "!"))):
+                raise ValueError(f"incomplete 需要 {expected_parts} 个与正文一致的发声片段")
+            if handoff:
+                next_turn = turns[i+1] if i+1 < len(turns) else {}
+                if (not hesitation_handoff or speaker not in users
+                    or next_turn.get("speaker") != "assistant" or next_turn.get("kind") != "speech"
+                    or next_turn.get("responds_to") != [i]
+                    or next_turn.get("addressee") not in (speaker, [speaker])):
+                    raise ValueError("犹豫接话须由助手下一轮明确回应刚停下的用户")
+                handoffs += 1
         if kind=="backchannel":
             anchor=t["anchor_text"]
             if (host is None or turns[host]["kind"]!="speech" or speaker==turns[host]["speaker"]
@@ -129,7 +201,7 @@ def validate(d, users, events, group, group_interrupt=False, interruption_chain=
                 or (listeners and anchor!=turns[i-1]["anchor_text"])):
                 raise ValueError(f"第{i}轮附和须回应同一主轮已说出的原文前缀，且说话人不同")
             if len(content) > 14:
-                raise ValueError(f"第{i}轮附和 text 过长，最多14字符。请改为简短反馈。")
+                raise BackchannelTooLong(f"第{i}轮附和 text 过长，最多14字符。请改为简短反馈。")
             if len(turns[host]["text"]) - len(anchor) < 8:
                 raise ValueError(f"第{i}轮附和锚点太晚，主轮在 anchor_text 之后必须至少还剩8字符。")
             listeners.add(speaker)
@@ -151,6 +223,8 @@ def validate(d, users, events, group, group_interrupt=False, interruption_chain=
                 interrupt_group |= same_host
             host=i
             listeners.clear()
+    if hesitation_handoff and handoffs != 1:
+        raise ValueError("剧本需要恰好一处犹豫接话")
     if group and not assistant_group:
         raise ValueError("缺少两名不同用户附和同一助手主轮")
     if interruption_chain:

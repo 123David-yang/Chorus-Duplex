@@ -33,6 +33,8 @@ ChorusDuplex 构建多位说话人与语音助手共同参与的普通话合成�
 | 多人同时或连续打断 | 两人打断同一位说话人，或 A 打断助手、助手回应 A、B 再打断助手的补充。 |
 | 第三方插话 `side_talk` | 第三方短暂参与插曲，随后恢复主线。第三方话轮单独标注。 |
 
+**犹豫接话** · 用户话说到一半停住，助手等 2.5–3.2 秒，再根据已听到的内容温和地给出建议。用户轮标为 `incomplete`，加上 `resolution: assistant_handoff`。助手作为独立的下一轮引用该用户轮。
+
 ## 和公开双工数据集对比
 
 [Full-Duplex-Bench v1.0 和 v1.5](https://github.com/kevinhu-nv/Full-Duplex-Bench-NV/blob/main/dataset/README.md) 是以一位主要用户和助手为中心的双工评测集，部分重叠评测含其他人声。[MultiTalkFT](https://huggingface.co/datasets/MultiTalk/MultiTalkFT) 是开放的中英多人双工训练语料，提供按说话人分轨的音频与词级时间对齐。[MultiTalk 论文](https://arxiv.org/html/2609.36903v1)
@@ -45,6 +47,7 @@ ChorusDuplex 构建多位说话人与语音助手共同参与的普通话合成�
 | **打断** | ✓ | ✓ | ✓ |
 | ↳ 同时或连续打断 | — | — | ✓ |
 | **未完成** | ✓ | — | ✓ |
+| ↳ 犹豫接话 | — | — | ✓ |
 | 第三方交流 | ✓ | — | ✓ |
 | 背景人声配对 | ✓ | — | ✓ |
 

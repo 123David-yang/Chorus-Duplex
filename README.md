@@ -33,6 +33,8 @@ These are design targets. They also cover newcomers, turn coordination and groun
 | Simultaneous or successive interruptions | Two users interrupt the same speaker, or user A interrupts the assistant, the assistant responds, and user B interrupts the follow-up. |
 | Third-party speech, `side_talk` | A third party speaks briefly in a side exchange before the participants return to the main thread. |
 
+**Hesitation handoff** · After a user trails off mid-thought, the assistant waits 2.5–3.2 seconds and gently offers a suggestion based on what it heard. The user turn is marked `incomplete` with `resolution: assistant_handoff`. The assistant reply is a separate turn linked to the user.
+
 ## Comparison with released duplex datasets
 
 [Full-Duplex-Bench v1.0 and v1.5](https://github.com/kevinhu-nv/Full-Duplex-Bench-NV/blob/main/dataset/README.md) provide evaluation cases centred on one focal user and a model, with additional voices in some overlap tests. [MultiTalkFT](https://huggingface.co/datasets/MultiTalk/MultiTalkFT) is an English–Mandarin multi-speaker training corpus with per-speaker audio and word-level timing. [MultiTalk paper](https://arxiv.org/html/2609.36903v1)
@@ -45,6 +47,7 @@ These are design targets. They also cover newcomers, turn coordination and groun
 | **Interruption** | ✓ | ✓ | ✓ |
 | ↳ Simultaneous or successive | — | — | ✓ |
 | **Incomplete turn** | ✓ | — | ✓ |
+| ↳ Hesitation handoff | — | — | ✓ |
 | Third-party exchange | ✓ | — | ✓ |
 | Paired background speech | ✓ | — | ✓ |
 
