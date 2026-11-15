@@ -53,7 +53,7 @@ audio/
 
 ## Run locally
 
-Use Python 3.10 or newer. Install the dependencies and copy `.env.example` to `.env`. Configure these inputs locally.
+Use Python 3.11 or newer. Install the dependencies and copy `.env.example` to `.env`. Configure these inputs locally.
 
 - A Chat Completions endpoint, model, and API key for script generation.
 - The [MOSS-TTS-Nano ONNX runtime and models](https://github.com/OpenMOSS/MOSS-TTS-Nano). Set `MOSS_DIR` to the runtime checkout and `MOSS_MODEL_DIR` to the model directory.
@@ -63,12 +63,22 @@ Use Python 3.10 or newer. Install the dependencies and copy `.env.example` to `.
 
 ```bash
 python -m pip install -r requirements.txt
+python -m scripts.production.scale_moss --help
+python -m scripts.production.scale_moss --check
 python -m scripts.production.scale_moss --root output/moss --hours 0.05
 ```
+
+`--check` checks local inputs without loading models or contacting the script API. `--hours 0.05` requests three minutes of credited audio. `--root` selects the output directory.
 
 The output includes `annotations.jsonl`, per-dialogue timelines and paired 48 kHz stereo FLAC files under `audio/`. The left channel contains users and third parties, and the right channel contains the assistant. For the babble variant, VOiCES speech is selected per dialogue and mixed into the left channel at a target SNR of 10 dB. VOiCES is from SRI International / Lab41, In-Q-Tel, under CC BY 4.0. Preserve attribution when distributing the mixed audio.
 
 The runner checks script structure, turn timing, TTS truncation and file format. It does not run ASR. A single synthesis instance is reused and completed IDs are skipped on restart.
+
+## How dialogue variety is generated
+
+The dialogue index rotates through 15 topic domains. A seeded sampler varies the group size (one to six users), relationships, setting, target turn count and human voice assignments. The same index gives the same scenario plan. The script model writes the actual situation, personas and dialogue around that plan.
+
+The sampler requests incomplete turns (40%), backchannels (60%), interruptions (27%) and side talk (25%) independently, with a curated first case. Where the group size and event allow it, the plan can request simultaneous or consecutive backchannels, simultaneous interruptions or successive interruptions. The validator checks the requested events, speaker identities and their references before synthesis. The assistant keeps its fixed MOSS voice; optional reference clips expand the human voice pool.
 
 ## Code layout
 

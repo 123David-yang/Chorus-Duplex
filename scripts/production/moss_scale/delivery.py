@@ -17,6 +17,14 @@ from .render import render
 from .storage import atomic_json
 
 
+def background_rooms():
+    root = Path(os.environ.get("BG_SOURCE_DIR", BABBLE))
+    rooms = sorted(path for path in root.glob("rm*/babb") if any(path.glob("*.wav")))
+    if not rooms:
+        raise FileNotFoundError(f"VOiCES WAV clips not found under {root}/rm*/babb. Set BG_SOURCE_DIR.")
+    return rooms
+
+
 def deliver(d, synth, root):
     ident = d["dialogue_id"]
     stage = root / "staging" / ident
@@ -24,11 +32,8 @@ def deliver(d, synth, root):
     clean = stage / f"{ident}.flac"
     noisy = stage / f"{ident}_babble.flac"
     timing = stage / f"{ident}.timeline.json"
+    rooms = background_rooms()
     frames, pause_ms = render(d, synth, clean, timing)
-    background_root = Path(os.environ.get("BG_SOURCE_DIR", BABBLE))
-    rooms = sorted(p for p in background_root.glob("rm*/babb") if any(p.glob("*.wav")))
-    if not rooms:
-        raise FileNotFoundError("Set BG_SOURCE_DIR to the VOiCES babble directory containing rm*/babb.")
     room = random.Random(ident).choice(rooms)
     bg = stage / "background.wav"
     stitch_clips(room, bg, frames / SAMPLE_RATE + 2, seed_key=ident)

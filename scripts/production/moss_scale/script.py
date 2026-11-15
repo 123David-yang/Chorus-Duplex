@@ -33,13 +33,17 @@ def generate(index, root):
     interruption_chain = count >= 2 and "interruption" in events and not group_interrupt and rng.random() < .30
     system = """写一段自然的中文多人对话，仅输出 JSON 对象，字段 setting、topic、participants、turns。
 participants 中每个人含 id、persona、style。turns 每项含 speaker、text、addressee、kind、responds_to。
-kind 取 speech/backchannel/interruption/side_talk/incomplete。responds_to 是实际回应的过去轮次索引，从0开始。
+kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去轮次索引，从0开始。
 实际说出的话写在 text，别写括号舞台指令、角色名标签、轮次或省略号占位。每轮1至2句，话题细节鲜活具体，不重复同一种开头或套话。
-按指定事件创作，未指定事件不要硬加。普通轮次 kind=speech。助手应自然回应实际求助。
-incomplete 是同一人话说到一半犹豫后继续说，额外给 parts 数组（2个实际说出的片段）；第二段可按语境用“嗯”“啊”“那个”“我想想”“怎么说呢”“等一下我捋捋”，也可以直接续说。语气词要符合说话人习惯，避免每条重复。随后接续前半句的意思。text 必须等于两个片段直接拼接。第一段不能是已结束的完整陈述，也不要为了插停顿无意义地口吃。
-backchannel 紧跟被附和的主轮，addressee 指向主轮说话人，responds_to 仅包含主轮索引。额外给 anchor_text，逐字复制主轮开头直到已说出完整事实，主播仍至少有8个字可继续说。附和可用“对对”“我也觉得”“有道理”等，不引入新观点。多人附和连续写不同用户，引用同一主轮和同一 anchor_text。不要把附和放在 incomplete 或被打断的轮次上。
-interruption 紧接被打断的轮，其上一轮写只来得及说出的半句，不补全。本轮抢话要具体回应已经听到的内容。如果要求多人抢话，连续写两位不同用户各自抢话，responds_to 都只指向同一个原发言者轮次，addressee 都指向原发言者。两人围绕同一个关键点，各只说一句自然的话。如果要求连续打断，严格按四轮：assistant未说完→用户A打断→assistant回应A并补充，仍未说完→不同的用户B打断这次补充；每轮responds_to引用前一轮。
-side_talk 由 third_party_01 说出，插在中段，前面有正式成员开口搭话且后续自然返回主线。第三方不进入 participants。"""
+按指定事件创作，未指定事件不要硬加。普通轮次 kind=speech。助手应自然回应实际求助。"""
+    event_rules = {
+        "incomplete": "incomplete 是同一人话说到一半犹豫后继续说，额外给 parts 数组（2个实际说出的片段）；第二段可按语境用“嗯”“啊”“那个”“我想想”“怎么说呢”“等一下我捋捋”，也可以直接续说。语气词要符合说话人习惯，避免每条重复。随后接续前半句的意思。text 必须等于两个片段直接拼接。第一段不能是已结束的完整陈述，也不要为了插停顿无意义地口吃。",
+        "backchannel": "backchannel 紧跟被附和的主轮，addressee 指向主轮说话人，responds_to 仅包含主轮索引。额外给 anchor_text，逐字复制主轮开头直到已说出完整事实，主播仍至少有8个字可继续说。附和可用“对对”“我也觉得”“有道理”等，不引入新观点。多人附和连续写不同用户，引用同一主轮和同一 anchor_text。不要把附和放在 incomplete 或被打断的轮次上。",
+        "interruption": "interruption 紧接被打断的轮，其上一轮写只来得及说出的半句，不补全。本轮抢话要具体回应已经听到的内容。如果要求多人抢话，连续写两位不同用户各自抢话，responds_to 都只指向同一个原发言者轮次，addressee 都指向原发言者。两人围绕同一个关键点，各只说一句自然的话。如果要求连续打断，严格按四轮：assistant未说完→用户A打断→assistant回应A并补充，仍未说完→不同的用户B打断这次补充；每轮responds_to引用前一轮。",
+        "side_talk": "side_talk 由 third_party_01 说出，插在中段，前面有正式成员开口搭话且后续自然返回主线。第三方不进入 participants。",
+    }
+    for event in events:
+        system += "\n" + event_rules[event]
     request = {
         "领域": TOPIC_DOMAINS[index % len(TOPIC_DOMAINS)],
         "关系": rng.choice(["邻居", "同事", "老朋友", "家人", "临时组队"]),
@@ -47,7 +51,7 @@ side_talk 由 third_party_01 说出，插在中段，前面有正式成员开口
         "轮数": turns, "用户及音色性别": {u: gender_of(mapping[u]) for u in users},
         "必须各自有实际台词的 speaker": users + ["assistant"], "助手实际发言次数": "3到5轮", "本条事件": events, "安排一次两人附和助手": group, "安排一次两人同时抢话": group_interrupt, "安排一次连续打断": interruption_chain,
     }
-    system += "\n每段必须有至少三轮 speaker 精确写为 assistant 的真实发言。assistant 是同一场语音会话中的 AI，跟正式用户一起交谈，不加入 participants 数组。其他说话人仅使用请求给出的角色编号。指定事件必须落在独立话轮中，使用指定 kind。若指定列表为空，全部用 speech。轮数可以略微浮动。多人附和要给两个独立话轮。不要把主持人的反应或犹豫自动标成未指定的事件。"
+    system += "\n每段必须有至少三轮 speaker 精确写为 assistant 的真实发言。assistant 是同一场语音会话中的 AI，跟正式用户一起交谈，不加入 participants 数组。其他说话人仅使用请求给出的角色编号。指定事件必须落在独立话轮中，使用指定 kind。若指定列表为空，全部用 speech。轮数可以略微浮动。不要把主持人的反应或犹豫自动标成未指定的事件。"
     for attempt in range(2):
         raw = chat(system, json.dumps(request, ensure_ascii=False), temperature=.95, max_tokens=7000)
         try:
