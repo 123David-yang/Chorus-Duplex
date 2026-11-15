@@ -1,43 +1,49 @@
-# ChorusDuplex
+# ChorusDuplex — Multi-party full-duplex Mandarin dialogue
 
-ChorusDuplex generates synthetic Mandarin multi-party duplex dialogue with MOSS-TTS-Nano. The dataset includes dialogue annotations, clean audio, paired background-speech audio, and realized turn timing.
+**English** · [简体中文](README.zh-CN.md) · [Dataset and audio demos](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk)
 
-[Dataset, documentation, and audio previews on Hugging Face](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk)
+ChorusDuplex builds synthetic Mandarin conversations between a voice assistant and multiple people. It captures who is talking, whom they are addressing, what prompted each reply, and when an assistant should speak or listen. Each delivery pairs clean audio with a background-speech version and includes a script and the timing measured from the rendered audio.
 
-## 多人双工设计
+## Participation and addressees
 
-ChorusDuplex 用合成语音构造多人会话，记录谁在说、对谁说、根据哪一轮回应，以及助手什么时候该介入。早期设计把场景分成三类：
+The design follows the distinction between participation and address. Being present in a group conversation still leaves room for two other people to address each other.
 
-| 场景 | 助手的参与方式 |
-|---|---|
-| 参与型 | 用户向助手提问，或邀请助手把多人意见整理成建议。 |
-| 非参与型 | 用户之间或与第三方有自己的交流，指向和旁听信息可以用来区分助手何时保持安静。 |
-| 社交过渡 | 助手可用短附和表明在听，完整回答留给明确需要它的时机。 |
+| Situation | Example | Assistant behaviour |
+| --- | --- | --- |
+| Ratified and addressed | Two users ask the assistant to reconcile their plans, or one relays another's question. | Respond to the person or subgroup that asked. |
+| Present but unaddressed | Two users compare schedules before coming back to the assistant. | Listen and allow them to finish. |
+| Unratified side talk | A participant speaks briefly with a delivery person. | Keep track of the original topic and return to it afterward. A brief acknowledgement can mark the transition. |
+| Social bridge | Someone makes a brief aside in a shared discussion. | A short acknowledgement can signal attention while the speaker retains the floor. |
 
-`speaker` 记录说话人，`addressee` 记录发言指向，可指向一人或多人。用 `responds_to` 标出依赖的早先轮次。剧本中的回应、他人姓名和安排应根据对话中已经提供的信息。
+These are design targets. They also cover newcomers, turn coordination and grounding references in dialogue history. For example, after a newcomer says “Call me Xiaolin,” the assistant can say “Xiaolin.” An earlier reference can use “the person who mentioned the budget.” Scripts can also use a role or relationship established by the speakers. This gives a model cues to track speakers and address a subgroup instead of the entire room.
 
-| 互动 | 示例与标注 |
-|---|---|
-| 普通接话 | 前一轮结束后接话，`speech`。 |
-| 未完成 | 说到一半停 0.5–2 秒，随后同一人续说，`incomplete` 带 `parts` 和 `pause_ms`。 |
-| 单人附和 | 听众简短回应，主轮继续，`backchannel`。 |
-| 同时或连续附和 | 多人回应同一主轮中的事实，各有自己的音色和时刻。 |
-| 打断 | 用户在原轮结束前接过话轮，`interruption`。 |
-| 同时或连续打断 | 两人抢同一个话轮，或者 A 打断助手，助手回应，B 再打断补充。 |
-| 第三方插话 | 第三方参与短交流后主线恢复，第三方发言标作 `side_talk`。 |
+## Full-duplex interactions
 
-## 合成与交付
+| Type | What happens |
+| --- | --- |
+| Ordinary speech, `speech` | A speaker takes a turn in the main conversation. |
+| Incomplete turn, `incomplete` | One speaker pauses for 0.5–2 seconds mid-thought and then continues, sometimes with a natural filler such as 嗯 or 那个. |
+| Backchannel, `backchannel` | A listener acknowledges something already said while the main speaker continues. |
+| Simultaneous or consecutive backchannels | Two listeners acknowledge the same point together or in quick succession, each with their own voice and timing. |
+| Interruption, `interruption` | A speaker takes the floor during an unfinished turn, reacting to something already audible. |
+| Simultaneous or successive interruptions | Two users interrupt the same speaker, or user A interrupts the assistant, the assistant responds, and user B interrupts the follow-up. |
+| Third-party speech, `side_talk` | A third party speaks briefly in a side exchange before the participants return to the main thread. |
+
+## How the scripts vary
+
+The dialogue index cycles through 15 topic domains. Seeded sampling varies the one to six users, relationships, settings, target turn counts and human voice assignments. The script model writes the particular situation, personas and wording. The assistant has a fixed MOSS voice across dialogues. Optional reference recordings expand the human voice pool.
+
+The scenario plan samples incomplete turns, backchannels, interruptions and side talk independently at 40%, 60%, 27% and 25%, with a curated first case. Group events require enough participants. The prompt includes the rules for the selected events, and validation checks the required structure and references. These are planning probabilities. Script and audio rejection can change the delivered distribution.
+
+## Pipeline and delivery format
 
 ```text
-场景和音色采样
-    → LLM 剧本和因果引用校验
-    → MOSS ONNX 逐轮合成、VAD 和响度处理
-    → 排布停顿、重叠和双声道
-    → VOiCES 人声混音
-    → 干声、背景声、时间线、标注及完成记录
+Scenario and voice planning → script generation and validation
+→ MOSS-TTS-Nano ONNX synthesis → VAD and turn placement
+→ stereo rendering and VOiCES mixing → audio, annotations and timeline
 ```
 
-剧本记录计划中的相对间隔，时间线记录实际合成后的 `start_sec`、`end_sec` 和重叠。主持事实的 `anchor_text` 用于放置附和。同一话轮上的多人事件各自有独立记录，便于分析多人语音活动和助手介入时机。
+`participants` describes the humans in the main conversation. The assistant uses `assistant`, and third-party speech uses `third_party_01`. A turn has a `speaker`, `addressee`, `kind` and `responds_to`. The last field refers to earlier turn indices. A backchannel's `anchor_text` comes from the host turn, so the acknowledgement can be placed after the relevant words. The timeline records actual `start_sec` and `end_sec`, overlap, and event-specific details such as pause boundaries.
 
 ```text
 annotations.jsonl
@@ -47,48 +53,50 @@ audio/
   <dialogue_id>.timeline.json
 ```
 
-本地运行生成 `status.json` 和 `events.jsonl`。有效时长按已交付的干声计入，背景声是同一对话的配对版本。
-
-公开数据可用于研究多说话人话轮切换、打断和附和识别，以及助手发言时机。数据集卡片提供样本试听、下载和来源信息。[Hugging Face 数据集与试听](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk)
+Both versions are 48 kHz stereo. Users and third parties are on the left, and the assistant is on the right. The babble variant mixes VOiCES background speech into the left channel at a target SNR of 10 dB. An annotated third-party turn has its own timing and speaker ID. Each pair counts once toward the credited duration. Local runs also write `status.json`, `events.jsonl` and completion receipts.
 
 ## Run locally
 
-Use Python 3.11 or newer. Install the dependencies and copy `.env.example` to `.env`. Configure these inputs locally.
-
-- A Chat Completions endpoint, model, and API key for script generation.
-- The [MOSS-TTS-Nano ONNX runtime and models](https://github.com/OpenMOSS/MOSS-TTS-Nano). Set `MOSS_DIR` to the runtime checkout and `MOSS_MODEL_DIR` to the model directory.
-- A compatible [Silero VAD](https://github.com/snakers4/silero-vad) ONNX model at `VAD_MODEL`.
-- [VOiCES](https://registry.opendata.aws/lab41-voices/) babble clips. Set `BG_SOURCE_DIR` to a directory containing one or more `rm*/babb/*.wav` folders.
-- Optionally, set `VOICE_MANIFEST` for voice cloning. Use the manifest format below and supply each WAV separately.
+Use Python 3.11 or newer.
 
 ```bash
+git clone https://github.com/123David-yang/ChorusDuplex.git
+cd ChorusDuplex
 python -m pip install -r requirements.txt
+```
+
+Copy [`.env.example`](.env.example) to `.env`. In Windows PowerShell use `Copy-Item .env.example .env`; on macOS or Linux use `cp .env.example .env`. Fill in the local settings.
+
+| Setting | Required input |
+| --- | --- |
+| `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | Chat Completions API base URL, model ID and key. The client appends `/chat/completions`. |
+| `MOSS_DIR`, `MOSS_MODEL_DIR` | [MOSS-TTS-Nano ONNX](https://github.com/OpenMOSS/MOSS-TTS-Nano) runtime checkout containing `onnx_tts_runtime.py` and the local model directory. |
+| `VAD_MODEL` | Path to a compatible [Silero VAD](https://github.com/snakers4/silero-vad) ONNX file. |
+| `BG_SOURCE_DIR` | [VOiCES](https://registry.opendata.aws/lab41-voices/) clips under `rm*/babb/*.wav`. |
+| `VOICE_MANIFEST` | Optional reference voices. Use `schema_version: 1` and a `voices` array. Each item has `id`, `gender`, `reference_audio`, `source_url`, `license` and `sha256`. Relative WAV paths resolve from the manifest directory. |
+
+```bash
 python -m scripts.production.scale_moss --help
 python -m scripts.production.scale_moss --check
 python -m scripts.production.scale_moss --root output/moss --hours 0.05
 ```
 
-`--check` checks local inputs without loading models or contacting the script API. `--hours 0.05` requests three minutes of credited audio. `--root` selects the output directory.
+`--check` validates local inputs without loading models or calling the API. The final command requests at least three minutes of credited audio. Reuse the same `--root` to resume from completion receipts.
 
-The output includes `annotations.jsonl`, per-dialogue timelines and paired 48 kHz stereo FLAC files under `audio/`. The left channel contains users and third parties, and the right channel contains the assistant. For the babble variant, VOiCES speech is selected per dialogue and mixed into the left channel at a target SNR of 10 dB. VOiCES is from SRI International / Lab41, In-Q-Tel, under CC BY 4.0. Preserve attribution when distributing the mixed audio.
-
-The runner checks script structure, turn timing, TTS truncation and file format. It does not run ASR. A single synthesis instance is reused and completed IDs are skipped on restart.
-
-## How dialogue variety is generated
-
-The dialogue index rotates through 15 topic domains. A seeded sampler varies the group size (one to six users), relationships, setting, target turn count and human voice assignments. The same index gives the same scenario plan. The script model writes the actual situation, personas and dialogue around that plan.
-
-The sampler requests incomplete turns (40%), backchannels (60%), interruptions (27%) and side talk (25%) independently, with a curated first case. Where the group size and event allow it, the plan can request simultaneous or consecutive backchannels, simultaneous interruptions or successive interruptions. The validator checks the requested events, speaker identities and their references before synthesis. The assistant keeps its fixed MOSS voice; optional reference clips expand the human voice pool.
-
-## Code layout
+## Repository layout
 
 | Path | Purpose |
-|---|---|
-| `scripts/production/moss_scale/` | Script validation, synthesis timeline, paired delivery and batch scheduling |
-| `scripts/text/` | Dialogue schema, generation and voice assignment |
-| `scripts/sound/` | TTS adapters, VAD and background mixing |
+| --- | --- |
+| `scripts/production/scale_moss.py` | CLI entry point |
+| `scripts/production/moss_scale/` | Script planning, validation, rendering, scheduling and delivery |
+| `scripts/text/` | Dialogue schema, generation components and voices |
+| `scripts/sound/` | TTS backends, VAD and background mixing |
 | `data/` | Topic, scenario and backchannel configuration |
 
-A voice manifest uses `schema_version: 1` and a `voices` array. Each item includes `id`, `gender`, `reference_audio`, `source_url`, `license` and `sha256`. Relative audio paths resolve from the manifest directory. Use reference audio with appropriate permissions, such as selected clips from [AISHELL-3](https://www.openslr.org/93/).
+## Data, limitations and attribution
 
-Project contact and maintainer display name: David.
+The data is synthetic Mandarin. Generation checks script structure, timing, truncation and audio format. The CLI currently runs without ASR. The dataset card lists available recordings, audio demos and sources. [Hugging Face dataset](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk)
+
+VOiCES is from SRI International / Lab41, In-Q-Tel, under CC BY 4.0. Preserve attribution when redistributing audio mixes. For human voice references, use appropriately licensed clips and keep their source and licence in the manifest. [VOiCES corpus](https://registry.opendata.aws/lab41-voices/)
+
+Maintainer · David
