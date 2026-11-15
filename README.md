@@ -67,6 +67,10 @@ cd ChorusDuplex
 python -m pip install -r requirements.txt
 ```
 
+Install the MOSS runtime's dependencies in the same Python environment using the instructions for the checkout you use. This repository's `requirements.txt` covers the ChorusDuplex pipeline. A MOSS checkout that imports PyTorch or torchaudio also needs compatible packages, even when inference runs on CPU. [MOSS ONNX setup](https://github.com/OpenMOSS/MOSS-TTS-Nano#onnx-cpu-inference)
+
+Download the [TTS weights](https://huggingface.co/OpenMOSS-Team/MOSS-TTS-Nano-100M-ONNX) and [audio tokenizer weights](https://huggingface.co/OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX). Set `MOSS_MODEL_DIR` to their shared parent, containing `MOSS-TTS-Nano-100M-ONNX/` and `MOSS-Audio-Tokenizer-Nano-ONNX/`. Keep the relative filenames within each directory.
+
 Copy [`.env.example`](.env.example) to `.env`. In Windows PowerShell use `Copy-Item .env.example .env`; on macOS or Linux use `cp .env.example .env`. Fill in the local settings.
 
 | Setting | Required input |

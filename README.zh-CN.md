@@ -67,6 +67,10 @@ cd ChorusDuplex
 python -m pip install -r requirements.txt
 ```
 
+在同一个 Python 环境里，按所用 MOSS 运行时版本的说明安装依赖。本仓库的 `requirements.txt` 列的是 ChorusDuplex 链路依赖。如果所用的 MOSS 代码会导入 PyTorch 或 torchaudio，即便用 CPU 推理，也要安装对应的兼容包。[MOSS ONNX 安装说明](https://github.com/OpenMOSS/MOSS-TTS-Nano#onnx-cpu-inference)
+
+下载 [TTS 权重](https://huggingface.co/OpenMOSS-Team/MOSS-TTS-Nano-100M-ONNX)和[音频分词器权重](https://huggingface.co/OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX)。把 `MOSS_MODEL_DIR` 指向它们的共同父目录，里面应有 `MOSS-TTS-Nano-100M-ONNX/` 和 `MOSS-Audio-Tokenizer-Nano-ONNX/`，保留各目录中的相对路径及文件名。
+
 把 [`.env.example`](.env.example) 复制为 `.env`。Windows PowerShell 用 `Copy-Item .env.example .env`，macOS 或 Linux 用 `cp .env.example .env`。然后填写本地配置。
 
 | 配置项 | 填写内容 |
