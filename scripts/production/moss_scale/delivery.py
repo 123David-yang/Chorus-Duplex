@@ -25,10 +25,41 @@ def background_rooms():
     return rooms
 
 
+def file_sha256(path):
+    with path.open("rb") as file:
+        return hashlib.file_digest(file, "sha256").hexdigest()
+
+
+def finish_delivery(root, pending):
+    payload = json.loads(pending.read_text(encoding="utf-8"))
+    ident = pending.parent.name
+    names = (f"{ident}.flac", f"{ident}_babble.flac", f"{ident}.timeline.json")
+    if payload["annotation"]["dialogue_id"] != ident or set(payload["sha256"]) != set(names):
+        raise ValueError(f"Invalid pending delivery: {ident}")
+    for name in names:
+        staged = pending.parent / name
+        destination = root / "audio" / name
+        existing = destination if destination.exists() else staged
+        if file_sha256(existing) != payload["sha256"][name]:
+            raise ValueError(f"Delivery file conflicts with pending receipt: {name}")
+        if existing == staged:
+            staged.replace(destination)
+    pending.replace(root / "completed" / f"{ident}.json")
+    return payload
+
+
+def recover_deliveries(root):
+    for pending in sorted((root / "staging").glob("*/delivery.pending.json")):
+        finish_delivery(root, pending)
+
+
 def deliver(d, synth, root):
     ident = d["dialogue_id"]
     stage = root / "staging" / ident
     stage.mkdir(exist_ok=True)
+    pending = stage / "delivery.pending.json"
+    if pending.is_file():
+        return finish_delivery(root, pending)
     clean = stage / f"{ident}.flac"
     noisy = stage / f"{ident}_babble.flac"
     timing = stage / f"{ident}.timeline.json"
@@ -46,18 +77,11 @@ def deliver(d, synth, root):
                "credited_seconds":frames/SAMPLE_RATE-pause_ms/1000-d["turns"][0]["gap_before_ms"]/1000,
                "background":{"corpus":"VOiCES","license":"CC BY 4.0","room":room.parent.name,
                              "mix_channel":"left","target_snr_db":10,"seed":ident},
-               "sha256":{p.name:hashlib.file_digest(p.open("rb"),"sha256").hexdigest() for p in (clean,noisy,timing)}}
-    for path in (clean,noisy,timing):
-        dest=root/"audio"/path.name
-        if dest.exists():
-            with dest.open("rb") as file:
-                if hashlib.file_digest(file,"sha256").hexdigest()!=payload["sha256"][path.name]:
-                    raise ValueError(f"交付目录已经存在不同文件 {dest.name}")
-        else:
-            path.replace(dest)
+               "sha256":{p.name:file_sha256(p) for p in (clean,noisy,timing)}}
     bg.unlink()
-    atomic_json(root/"completed"/f"{ident}.json",payload)
-    return payload
+    atomic_json(pending, payload)
+    return finish_delivery(root, pending)
+
 
 
 def refresh(root, target):

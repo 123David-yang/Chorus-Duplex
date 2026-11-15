@@ -11,7 +11,7 @@ from scripts.config import MOSS_DIR, VAD_MODEL, load_env
 from scripts.production.state.lock import ProductionLock
 
 from .config import DEFAULT_ROOT, RESOURCES
-from .delivery import background_rooms, deliver, refresh
+from .delivery import background_rooms, deliver, recover_deliveries, refresh
 from .render import FastSynth
 from .script import generate
 
@@ -22,8 +22,15 @@ def check_inputs():
     if not (runtime / "onnx_tts_runtime.py").is_file():
         errors.append("MOSS_DIR must point to a checkout containing onnx_tts_runtime.py.")
     model_dir = os.environ.get("MOSS_MODEL_DIR")
-    if model_dir and not Path(model_dir).is_dir():
-        errors.append("MOSS_MODEL_DIR does not exist.")
+    if model_dir:
+        model_root = Path(model_dir).expanduser()
+        manifest_paths = (
+            "browser_poc_manifest.json",
+            "MOSS-TTS-Nano-100M-ONNX/browser_poc_manifest.json",
+            "MOSS-TTS-Nano-ONNX-CPU/browser_poc_manifest.json",
+        )
+        if not any((model_root / name).is_file() for name in manifest_paths):
+            errors.append("MOSS_MODEL_DIR must contain the ONNX browser_poc_manifest.json.")
     if not Path(os.environ.get("VAD_MODEL", VAD_MODEL)).is_file():
         errors.append("VAD_MODEL must point to a Silero VAD ONNX file.")
     if not os.environ.get("LLM_API_KEY"):
@@ -61,9 +68,13 @@ def main():
     for subdir in ("audio", "scripts", "completed", "staging"):
         (root/subdir).mkdir(parents=True, exist_ok=True)
     with ProductionLock(root):
+        recover_deliveries(root)
         hours=refresh(root,args.hours)
         if hours>=args.hours:
             return
+        errors = check_inputs()
+        if errors:
+            parser.error("\n".join(errors))
         synth=FastSynth(root/"staging")
         failures=0
         def next_index(index):
