@@ -1,0 +1,17 @@
+{
+  "multi_qa": {
+    "desc": "参与型-多人协同问答：一家人轮流与 AI 聊天，AI 按人分别回答",
+    "default_users": 3,
+    "profile": false
+  },
+  "side_talk": {
+    "desc": "非参与型-side-talk：有人对第三者说话（如对门外外卖员），AI 不响应",
+    "default_users": 2,
+    "profile": true
+  },
+  "social": {
+    "desc": "过渡带-社交润滑：新参与者进入话题，AI 可轻插一句但不过度",
+    "default_users": 2,
+    "profile": false
+  }
+}
