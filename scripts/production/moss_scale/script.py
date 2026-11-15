@@ -3,6 +3,7 @@ import json
 import random
 
 from scripts.config import TOPIC_DOMAINS
+from scripts.text.oneshot_agent.lexicon import load_bank
 from scripts.text.utils.llm import chat
 from scripts.text.voices import gender_of, reference_voices, voices_for_dialogue
 
@@ -73,48 +74,42 @@ def generate(index, root):
     hesitation_handoff = index != 0 and "incomplete" in events and random.Random(
         f"{ident}-hesitation-handoff"
     ).random() < .25
-    system = """写一段自然的中文多人对话，仅输出 JSON 对象，字段 setting、topic、participants、turns。
-participants 中每个人含 id、persona、style。turns 每项含 speaker、text、addressee、kind、responds_to。
-kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去轮次索引，从0开始。
-实际说出的话写在 text，别写括号舞台指令、角色名标签、轮次或省略号占位。每轮1至2句，话题细节鲜活具体，不重复同一种开头或套话。
-按指定事件创作，未指定事件不要硬加。普通轮次 kind=speech。助手应自然回应实际求助。"""
+    system = (
+        "生成自然中文多人对话，只返回 JSON：setting、topic、participants、turns。"
+        "participants 只列正式用户，每项 id、persona、style。"
+        "turns 每项 speaker、text、addressee、kind、responds_to；引用用从0开始的过去轮次编号数组，首轮用[]。"
+        "对话前中后各安排至少一轮 assistant 的实质发言，不编造助手的生活经历；写口语，每轮最多两句。"
+        "回应实际求助。只用请求中的事件，普通轮次用 speech。严格按请求轮数写，允许相差2轮。"
+    )
     event_rules = {
-        "incomplete": "incomplete 是同一人话说到一半犹豫后继续说，额外给 parts 数组（2个实际说出的片段）；第二段可按语境用“嗯”“啊”“那个”“我想想”“怎么说呢”“等一下我捋捋”，也可以直接续说。语气词要符合说话人习惯，避免每条重复。随后接续前半句的意思。text 必须等于两个片段直接拼接。第一段不能是已结束的完整陈述，也不要为了插停顿无意义地口吃。",
-        "backchannel": "backchannel 紧跟被附和的主轮，addressee 指向主轮说话人，responds_to 仅包含主轮索引。额外给 anchor_text，逐字复制主轮开头直到已说出完整事实，主播仍至少有8个字可继续说。附和本身 2 到 14 个字符，用“对对”“我也觉得”“有道理”等短反馈，不加解释或新观点。例：主轮“第一趟车七点开，我们最好提前二十分钟到站。”，anchor_text 只填“第一趟车七点开”，附和 text 可填“对，我也觉得”。不要把整句主轮当作锚点。同一组附和连续写在剧本里，引用同一主轮和同一 anchor_text。不要把附和放在 incomplete 或被打断的轮次上。",
-        "interruption": "interruption 紧接被打断的轮，其上一轮写只来得及说出的半句，不补全。本轮抢话要具体回应已经听到的内容。如果要求多人抢话，连续写两位不同用户各自抢话，responds_to 都只指向同一个原发言者轮次，addressee 都指向原发言者。两人围绕同一个关键点，各只说一句自然的话。两次打断若指向不同主轮，分别标注。",
-        "side_talk": "side_talk 由 third_party_01 说出，插在中段，前面有正式成员开口搭话且后续自然返回主线。第三方不进入 participants。",
+        "incomplete": "未说完后同一人续说。parts 为两个非空片段，直接拼起来等于 text，第一段不能是完整句。",
+        "backchannel": "紧跟 speech 主轮，只引用并面向主轮说话人。anchor_text 逐字复制已说完的事实前缀，后面至少剩8字。附和是2–14字短反馈，不加观点。",
+        "interruption": "单人打断引用并面向紧邻的 speech。被打断轮只写来得及说出的半句，打断内容回应已听到的信息。",
+        "side_talk": "第三方用 third_party_01，置于中段，先与正式用户交流再回主线，不列入 participants。",
     }
-    for event in events:
-        if event == "incomplete" and hesitation_handoff:
-            system += (
-                "\n本条用犹豫接话实现 incomplete。让一位用户说到一半迟疑，例如“我本来想明天先去那个”，"
-                "不用句号收尾。把该轮设为 kind=incomplete、resolution=assistant_handoff，"
-                "parts 只含一个与 text 相同的发声片段。下一轮必须是 assistant 的 speech，"
-                "addressee 只指这位用户，responds_to 只引该未完成轮。中间不要写静音轮。"
-                "助手等待较长停顿后，按用户已经说出的需求温和地提出建议或给一个选项，"
-                "例如“没关系，我先给你个思路，你看合不合适。”措辞按情境变化，避免催促或猜测没说出的信息。"
-            )
-        else:
-            system += "\n" + event_rules[event]
-    if "backchannel" in events:
-        if simultaneous:
-            system += "\n同时附和由两位不同的用户发出，合成时他们会同时开口。"
-        elif repeat_listener:
-            system += "\n连续附和：同一位用户先后两次简短表示认同。写成两个独立短反馈，措辞有自然变化，两句之间有短间隔。"
-        else:
-            system += "\n连续附和：两位不同用户先后表示认同，第二位等第一位说完再开口。"
-    if group:
-        system += (
-            "\n必做的一组附和要紧跟助手的 speech，回复对象必须是 assistant。"
-            "两条 responds_to 都只填该助手轮索引，anchor_text 都逐字复制同一个已说出的短前缀。"
-            "首轮 responds_to 用空数组 []，所有引用索引都用 JSON 数组。"
+    if hesitation_handoff:
+        event_rules["incomplete"] = (
+            "犹豫接话：用户想法未说完便停住，不能用完整问句加省略号冒充。标记 kind=incomplete，resolution=assistant_handoff。"
+            "下一轮是面向该用户的 assistant speech，只引用这一轮。助手温和提议，依据已听到的内容，静音由程序生成。"
         )
+    if events:
+        system += "\n" + "\n".join(event_rules[event] for event in events)
+    if "backchannel" in events or backchannel_to_interruption:
+        pool = list(dict.fromkeys(
+            entry["text"] for entry in load_bank()
+            if entry["type"] in {"ack", "receipt", "empathy"} and 2 <= len(entry["text"]) <= 10
+        ))
+        seeds = random.Random(f"{ident}-backchannel-seeds").sample(pool, min(4, len(pool)))
+        system += "\n附和措辞参考（按语境变化）：" + "、".join(seeds)
+    if group:
+        listeners = "同一用户分两次" if repeat_listener else "两位不同用户各一次"
+        system += f"\n附和组：{listeners}。两条紧随助手主轮，用同一个 anchor_text、responds_to 和 addressee=assistant。"
+    if group_interrupt:
+        system += "\n同时打断须写成连续三轮：assistant speech → 用户A interruption → 用户B interruption。后两轮 addressee=assistant，responds_to 都是同一个助手轮索引，B 不引用 A。"
     if backchannel_to_interruption:
         system += (
-            "\n安排恰好一处附和转打断。助手先给出一个可认可的具体信息，再继续说，直到被打断。"
-            "同一位用户的一条 interruption 先短暂认同，再用“不过”“但是”或“等一下”引出具体补充，"
-            "例如“我觉得可以，不过集合地点得换一下”。backchannel_prefix 逐字复制本轮开头的短附和，"
-            "例如“我觉得可以”。附和与后半句写在同一个 text 中。不要另写一轮 backchannel。"
+            "\n附和转打断：先写一轮 assistant speech，紧跟一轮用户 interruption。用户只引用该助手轮，addressee=assistant，先简短认同，再用不过、但是或等一下提出补充。"
+            "backchannel_prefix 逐字复制该用户 text 开头的认同，只写2–14字。"
         )
     request = {
         "领域": TOPIC_DOMAINS[index % len(TOPIC_DOMAINS)],
@@ -123,20 +118,19 @@ kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去�
         "轮数": turns, "用户及音色性别": {u: gender_of(mapping[u]) for u in users},
         "必须各自有实际台词的 speaker": users + ["assistant"], "助手实际发言次数": "3到5轮", "本条事件": events, "对助手安排一组附和": group, "安排一次两人同时抢话": group_interrupt, "安排一次附和转打断": backchannel_to_interruption,
     }
-    system += "\n每段必须有至少三轮 speaker 精确写为 assistant 的真实发言。assistant 是同一场语音会话中的 AI，跟正式用户一起交谈，不加入 participants 数组。其他说话人仅使用请求给出的角色编号。指定事件必须落在独立话轮中，使用指定 kind。若指定列表为空，全部用 speech。轮数可以略微浮动。不要把主持人的反应或犹豫自动标成未指定的事件。"
     for attempt in range(2):
-        raw = chat(system, json.dumps(request, ensure_ascii=False), temperature=.95, max_tokens=7000)
+        raw = chat(system, json.dumps(request, ensure_ascii=False, separators=(",", ":")),
+                   temperature=.85 if attempt == 0 else .65, max_tokens=7000)
         try:
             d = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
-            if hesitation_handoff or backchannel_to_interruption or group:
-                for turn in d["turns"]:
-                    refs = turn["responds_to"]
-                    if refs is None:
-                        turn["responds_to"] = []
-                    elif type(refs) is int:
-                        turn["responds_to"] = [refs]
-                    if turn.get("resolution") == "assistant_handoff":
-                        turn["parts"] = [turn["text"]]
+            for turn in d["turns"]:
+                refs = turn.get("responds_to")
+                if refs is None:
+                    turn["responds_to"] = []
+                elif type(refs) is int:
+                    turn["responds_to"] = [refs]
+                if turn.get("resolution") == "assistant_handoff":
+                    turn["parts"] = [turn["text"]]
             try:
                 validate(
                     d, users, events, group, group_interrupt, hesitation_handoff=hesitation_handoff,
@@ -144,8 +138,6 @@ kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去�
                     sequential_backchannels=not simultaneous, repeat_listener=repeat_listener,
                 )
             except BackchannelTooLong:
-                if attempt:
-                    raise
                 shorten_backchannels(d)
                 validate(
                     d, users, events, group, group_interrupt, hesitation_handoff=hesitation_handoff,
@@ -155,8 +147,7 @@ kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去�
             break
         except (ValueError, KeyError, TypeError) as exc:
             (root/"staging"/f"{ident}-text-reject-{attempt}.txt").write_text(raw,encoding="utf-8")
-            request["上次校验问题"] = str(exc)
-            request["修正上次输出"] = raw
+            request["本次修正要求"] = f"重新生成一段完整剧本，解决：{exc}"
             if attempt == 1:
                 raise
     d.update(dialogue_id=ident, scenario="side_talk" if "side_talk" in events else "multi_qa")
@@ -175,7 +166,12 @@ kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去�
                                         for v in voices.values() if v in refs},
                     "topic_domain":request["领域"],"requested_events":events,
                     "listener_spacing_ms":0 if simultaneous else rng.randint(90, 180),
-                    "listener_sequence":"simultaneous" if simultaneous else "sequential"}
+                    "listener_sequence":"simultaneous" if simultaneous else "sequential",
+                    "requested_backchannel_group": group,
+                    "requested_repeat_listener": group and repeat_listener,
+                    "requested_simultaneous_interruption": group_interrupt,
+                    "requested_hesitation_handoff": hesitation_handoff,
+                    "requested_backchannel_transition": backchannel_to_interruption}
     atomic_json(path, d)
     return d
 

@@ -187,3 +187,75 @@ def revise_dialogue(d, report, turns_requested: int):
         candidate.profile.update({k:v for k,v in profile.items() if k!="realized"})
         return candidate,{"status":"revised","fixes":fixes}
     except Exception as exc: return None,{"status":"revision_unavailable","error_type":type(exc).__name__}
+
+def scale_event_coverage(draft):
+    """Report observed events in a validated MOSS scale-up script."""
+    grouped = {}
+    interruption_counts = {}
+    features = set()
+    for turn in draft["turns"]:
+        kind = turn["kind"]
+        if kind != "speech":
+            features.add(kind)
+        if kind == "backchannel":
+            grouped.setdefault(turn["responds_to"][0], []).append(turn["speaker"])
+        elif kind == "interruption":
+            host = turn["responds_to"][0]
+            interruption_counts[host] = interruption_counts.get(host, 0) + 1
+            if turn.get("backchannel_prefix"):
+                features.add("backchannel_to_interruption")
+        elif kind == "incomplete" and turn.get("resolution") == "assistant_handoff":
+            features.add("hesitation_handoff")
+    if any(count > 1 for count in interruption_counts.values()):
+        features.add("simultaneous_interruption")
+    for speakers in grouped.values():
+        if len(speakers) > 1:
+            mode = draft["profile"].get("listener_sequence", "simultaneous")
+            features.add(f"{mode}_backchannels")
+            if mode == "sequential" and len(set(speakers)) < len(speakers):
+                features.add("same_listener_backchannels")
+    return sorted(features)
+
+
+def review_scale_draft(draft):
+    """Score a MOSS script before rendering and retain concrete turn evidence."""
+    features = scale_event_coverage(draft)
+    rules = {
+        "backchannel": "短附和语义须由 anchor_text 支撑，不能依赖其后内容。",
+        "sequential_backchannels": "连续回应须自然，重复回应要有语气或措辞变化。",
+        "simultaneous_backchannels": "不同听众可以使用相同或不同短句，均须符合已听事实。",
+        "interruption": "用户确实接过话轮，助手后续承接新限制。不同主轮上的打断分别看。",
+        "simultaneous_interruption": "同一主轮上的两人各自有明确的打断理由。",
+        "backchannel_to_interruption": "承认部分与转折自然衔接，转折才是真正抢话。",
+        "hesitation_handoff": "用户确实话没说完，助手长停顿后温和给建议，不猜没说的内容。",
+        "incomplete": "说到一半的文字应体现未完成，后续自然。",
+        "side_talk": "第三方交流结束后合理回到主线。",
+    }
+    required = ("causality", "addressing", "duplex", "naturalness")
+    checks = " ".join(rules[k] for k in features if k in rules)
+    fields = ("speaker", "text", "kind", "addressee", "responds_to", "anchor_text",
+              "backchannel_prefix", "resolution", "pause_ms")
+    rows = [{key: turn[key] for key in fields if key in turn} for turn in draft["turns"]]
+    instruction = (
+        "审查中文语音剧本，轮次从0开始。仅返回JSON，键 causality、addressing、duplex、naturalness，"
+        "每项含整数 score(0–5)、turn_ids(真实轮次数组)、reason(一句证据)。"
+        "causality=已听信息及前后引用；addressing=谁向谁说；duplex=出现的事件是否合理；naturalness=口语与连贯。"
+        "3表示基本可用，4表示良好，5表示自然且清楚。只评实际事件。"
+        "助手自称亲身生活经历，naturalness 至多2；已完整表达却标未完成，duplex 至多2。"
+        + checks
+    )
+    scores = parse_object(llm.chat(instruction, json.dumps(rows, ensure_ascii=False, separators=(",", ":")),
+                                   temperature=0, max_tokens=1000))
+    if set(scores) != set(required):
+        raise ValueError("Scale review must contain four dimensions")
+    for row in scores.values():
+        if (type(row["score"]) is not int or not 0 <= row["score"] <= 5
+            or not isinstance(row["turn_ids"], list) or not row["turn_ids"]
+            or any(type(i) is not int or not 0 <= i < len(rows) for i in row["turn_ids"])
+            or not isinstance(row["reason"], str) or not row["reason"].strip()):
+            raise ValueError("Scale review must cite valid turns and scores")
+    values = [row["score"] for row in scores.values()]
+    mean = sum(values) / len(values)
+    return {"decision": "accept" if min(values) >= 3 and mean >= 3.5 else "reject",
+            "mean_score": mean, "dimensions": scores, "features": features}
+

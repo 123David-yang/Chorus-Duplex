@@ -57,8 +57,6 @@ These are design targets. They also cover newcomers, turn coordination and groun
 
 ✓ Supported · — Unclear from public sources · ✗ Explicitly unsupported
 
-Scope includes Full-Duplex-Bench v1.0/v1.5, MultiTalkFT, and the ChorusDuplex generator.
-
 ChorusDuplex places short acknowledgements relative to the words already audible on the host turn. It records conversational side talk as a speaker turn and adds room chatter as a separate acoustic condition. This lets researchers study whom the assistant should respond to with or without competing voices in the room.
 
 ## How the scripts vary
@@ -136,3 +134,7 @@ The data is synthetic Mandarin. Generation checks script structure, timing, trun
 VOiCES is from SRI International / Lab41, In-Q-Tel, under CC BY 4.0. Preserve attribution when redistributing audio mixes. For human voice references, use appropriately licensed clips and keep their source and licence in the manifest. [VOiCES corpus](https://registry.opendata.aws/lab41-voices/)
 
 Maintainer · David
+
+## Dataset citation
+
+If you use the dataset, cite the [BibTeX entry on the dataset card](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk#citation).

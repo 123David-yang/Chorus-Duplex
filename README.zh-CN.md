@@ -57,8 +57,6 @@ ChorusDuplex 构建多位说话人与语音助手共同参与的普通话合成�
 
 ✓ 支持 · — 公开资料未明确 · ✗ 明确不支持
 
-对比范围为 Full-Duplex-Bench v1.0/v1.5、MultiTalkFT 和 ChorusDuplex 生成器。
-
 ChorusDuplex 把短附和对齐到主轮中已经说出口的内容。第三方插话有自己的说话人、发言指向和时间，环境人声则作为独立的声学条件加入配对音频。因此可以在同一条对话上比较：有无背景人声时，助手应该回应谁、何时应该保持安静。
 
 ## 剧本如何产生多样性
@@ -136,3 +134,7 @@ python -m scripts.production.scale_moss --root output/moss --hours 0.05
 背景素材来自 SRI International / Lab41, In-Q-Tel 的 VOiCES，适用 CC BY 4.0。分发混音时请保留署名。使用音色参考录音时，请确保有相应使用权，并在清单中保留来源和许可。[VOiCES 语料](https://registry.opendata.aws/lab41-voices/)
 
 维护者 · David
+
+## 数据引用
+
+使用数据时，请引用 Hugging Face 数据卡中的 [BibTeX 条目](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk#citation)。
