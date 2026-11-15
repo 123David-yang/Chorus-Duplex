@@ -1,5 +1,7 @@
 # ChorusDuplex（和声·双工）· 中文多人全双工语音对话
 
+[![GitHub](https://img.shields.io/badge/GitHub-ChorusDuplex-181717?logo=github&logoColor=white)](https://github.com/123David-yang/ChorusDuplex) [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Dataset-FFD21E?logo=huggingface&logoColor=000)](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk)
+
 [English](README.md) · **简体中文** · [数据集与音频试听](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk)
 
 ChorusDuplex 构建多位说话人与语音助手共同参与的普通话合成对话。它记录谁在说、对谁说、回应哪一句，以及助手何时该开口、何时该听。每条对话配对交付干声和背景人声版本，并附上剧本与根据合成音频得到的时间线。
