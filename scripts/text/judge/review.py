@@ -245,8 +245,9 @@ def review_scale_draft(draft):
         + checks
     )
     scores = parse_object(llm.chat(instruction, json.dumps(rows, ensure_ascii=False, separators=(",", ":")),
-                                   temperature=0, max_tokens=1000))
-    if set(scores) != set(required):
+                                   temperature=0, max_tokens=1000, json_output=True))
+    scores = scores.get("dimensions", scores)
+    if not isinstance(scores, dict) or set(scores) != set(required):
         raise ValueError("Scale review must contain four dimensions")
     for row in scores.values():
         if (type(row["score"]) is not int or not 0 <= row["score"] <= 5

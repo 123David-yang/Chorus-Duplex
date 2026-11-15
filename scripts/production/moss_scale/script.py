@@ -31,7 +31,7 @@ def shorten_backchannels(draft):
     }
     raw = chat(
         "把每条附和缩为2到14字符的自然短反馈，保留原语气。不要添加观点。只返回JSON对象，键保持轮次编号，值为缩短后的文字。",
-        json.dumps(candidates, ensure_ascii=False), temperature=.3, max_tokens=500,
+        json.dumps(candidates, ensure_ascii=False), temperature=.3, max_tokens=500, json_output=True,
     )
     corrections = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
     if not isinstance(corrections, dict) or set(corrections) != set(candidates):
@@ -77,7 +77,7 @@ def generate(index, root):
     system = (
         "生成自然中文多人对话，只返回 JSON：setting、topic、participants、turns。"
         "participants 只列正式用户，每项 id、persona、style。"
-        "turns 每项 speaker、text、addressee、kind、responds_to；引用用从0开始的过去轮次编号数组，首轮用[]。"
+        "turns 每项 speaker、text、addressee、kind、responds_to；引用用从0开始的过去轮次编号数组，首轮用[]。示例：{\"speaker\":\"user_01\",\"text\":\"咱们几点走？\",\"addressee\":\"assistant\",\"kind\":\"speech\",\"responds_to\":[]}。"
         "对话前中后各安排至少一轮 assistant 的实质发言，不编造助手的生活经历；写口语，每轮最多两句。"
         "回应实际求助。只用请求中的事件，普通轮次用 speech。严格按请求轮数写，允许相差2轮。"
     )
@@ -119,9 +119,10 @@ def generate(index, root):
         "必须各自有实际台词的 speaker": users + ["assistant"], "助手实际发言次数": "3到5轮", "本条事件": events, "对助手安排一组附和": group, "安排一次两人同时抢话": group_interrupt, "安排一次附和转打断": backchannel_to_interruption,
     }
     for attempt in range(2):
-        raw = chat(system, json.dumps(request, ensure_ascii=False, separators=(",", ":")),
-                   temperature=.85 if attempt == 0 else .65, max_tokens=7000)
+        raw = ""
         try:
+            raw = chat(system, json.dumps(request, ensure_ascii=False, separators=(",", ":")),
+                       temperature=.85 if attempt == 0 else .65, max_tokens=7000, json_output=True)
             d = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
             for turn in d["turns"]:
                 refs = turn.get("responds_to")

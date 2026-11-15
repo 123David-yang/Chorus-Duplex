@@ -6,6 +6,7 @@ import json
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 _CALL_LOG = ContextVar("llm_call_log", default=None)
@@ -27,14 +28,17 @@ def _config() -> tuple[str,str,str]:
     return base,key,model
 
 
-def chat(system: str,user: str,temperature: float=1.0,max_tokens: int=512) -> str:
+def chat(system: str,user: str,temperature: float=1.0,max_tokens: int=512, *, json_output: bool=False) -> str:
     started=time.perf_counter()
     meta={"success":False,"max_tokens":max_tokens}
     try:
         base,key,model=_config()
         meta["model"]=model
-        body=json.dumps({"model":model,"messages":[{"role":"system","content":system},
-             {"role":"user","content":user}],"temperature":temperature,"max_tokens":max_tokens}).encode("utf-8")
+        payload = {"model":model,"messages":[{"role":"system","content":system},
+                   {"role":"user","content":user}],"temperature":temperature,"max_tokens":max_tokens}
+        if json_output and urllib.parse.urlsplit(base).hostname == "api.deepseek.com":
+            payload["response_format"] = {"type": "json_object"}
+        body = json.dumps(payload).encode("utf-8")
         req=urllib.request.Request(f"{base.rstrip('/')}/chat/completions",data=body,
             headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},method="POST")
         with urllib.request.urlopen(req,timeout=120) as response:

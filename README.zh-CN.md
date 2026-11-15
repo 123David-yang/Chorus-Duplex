@@ -55,9 +55,7 @@ ChorusDuplex 构建多位说话人与语音助手共同参与的普通话合成�
 | ↳ 犹豫接话 | — | — | ✓ |
 | 背景人声配对 | ✓ | — | ✓ |
 
-✓ 支持 · — 公开资料未明确 · ✗ 明确不支持
-
-ChorusDuplex 把短附和对齐到主轮中已经说出口的内容。第三方插话有自己的说话人、发言指向和时间，环境人声则作为独立的声学条件加入配对音频。因此可以在同一条对话上比较：有无背景人声时，助手应该回应谁、何时应该保持安静。
+<sub>✓ 支持 · — 公开资料未明确 · ✗ 明确不支持</sub>
 
 ## 剧本如何产生多样性
 
@@ -126,6 +124,37 @@ python -m scripts.production.scale_moss --root output/moss --hours 0.05
 | `scripts/text/` | 对话结构、剧本生成组件和音色 |
 | `scripts/sound/` | 合成后端、VAD 和背景混音 |
 | `data/` | 话题、场景和附和配置 |
+
+## 快速读取
+
+运行 `pip install huggingface_hub soundfile`。下面读取一条标注、两份配对音频及时间线。音频数组按「采样点 × 声道」排列。
+
+```python
+import json
+
+import soundfile as sf
+from huggingface_hub import hf_hub_download
+
+REPO = "BiggestWave/ChorusDuplex-SideTalk"
+
+
+def fetch(path):
+    return hf_hub_download(REPO, path, repo_type="dataset")
+
+
+with open(fetch("annotations.jsonl"), encoding="utf-8") as f:
+    example = json.loads(next(line for line in f if line.strip()))
+dialogue_id = example["dialogue_id"]
+
+with open(fetch(f"audio/{dialogue_id}.timeline.json"), encoding="utf-8") as f:
+    timeline = json.load(f)
+
+clean, sr = sf.read(fetch(f"audio/{dialogue_id}.flac"), always_2d=True)
+babble, _ = sf.read(fetch(f"audio/{dialogue_id}_babble.flac"), always_2d=True)
+
+print(dialogue_id, sr, clean.shape, babble.shape)
+print(timeline[0]["speaker"], timeline[0]["start_sec"], timeline[0]["end_sec"])
+```
 
 ## 数据限制与素材来源
 

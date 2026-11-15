@@ -55,9 +55,7 @@ These are design targets. They also cover newcomers, turn coordination and groun
 | ↳ Hesitation handoff | — | — | ✓ |
 | Paired background speech | ✓ | — | ✓ |
 
-✓ Supported · — Unclear from public sources · ✗ Explicitly unsupported
-
-ChorusDuplex places short acknowledgements relative to the words already audible on the host turn. It records conversational side talk as a speaker turn and adds room chatter as a separate acoustic condition. This lets researchers study whom the assistant should respond to with or without competing voices in the room.
+<sub>✓ Supported · — Unclear from public sources · ✗ Explicitly unsupported</sub>
 
 ## How the scripts vary
 
@@ -126,6 +124,37 @@ python -m scripts.production.scale_moss --root output/moss --hours 0.05
 | `scripts/text/` | Dialogue schema, generation components and voices |
 | `scripts/sound/` | TTS backends, VAD and background mixing |
 | `data/` | Topic, scenario and backchannel configuration |
+
+## Quick start
+
+Run `pip install huggingface_hub soundfile`. This example loads one annotation, its paired audio, and the turn timeline. Audio arrays are shaped as samples × channels.
+
+```python
+import json
+
+import soundfile as sf
+from huggingface_hub import hf_hub_download
+
+REPO = "BiggestWave/ChorusDuplex-SideTalk"
+
+
+def fetch(path):
+    return hf_hub_download(REPO, path, repo_type="dataset")
+
+
+with open(fetch("annotations.jsonl"), encoding="utf-8") as f:
+    example = json.loads(next(line for line in f if line.strip()))
+dialogue_id = example["dialogue_id"]
+
+with open(fetch(f"audio/{dialogue_id}.timeline.json"), encoding="utf-8") as f:
+    timeline = json.load(f)
+
+clean, sr = sf.read(fetch(f"audio/{dialogue_id}.flac"), always_2d=True)
+babble, _ = sf.read(fetch(f"audio/{dialogue_id}_babble.flac"), always_2d=True)
+
+print(dialogue_id, sr, clean.shape, babble.shape)
+print(timeline[0]["speaker"], timeline[0]["start_sec"], timeline[0]["end_sec"])
+```
 
 ## Data, limitations and attribution
 
