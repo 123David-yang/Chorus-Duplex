@@ -1,6 +1,6 @@
 # ChorusDuplex — Multi-party full-duplex Mandarin dialogue
 
-[![GitHub](https://img.shields.io/badge/GitHub-ChorusDuplex-181717?logo=github&logoColor=white)](https://github.com/123David-yang/ChorusDuplex) [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Dataset-FFD21E?logo=huggingface&logoColor=000)](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk)
+[![GitHub](https://img.shields.io/badge/GitHub-ChorusDuplex-181717?logo=github&logoColor=white)](https://github.com/123David-yang/ChorusDuplex) [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Dataset-FFD21E?logo=huggingface&logoColor=FFD21E)](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk)
 
 **English** · [简体中文](README.zh-CN.md) · [Dataset and audio demos](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk)
 
