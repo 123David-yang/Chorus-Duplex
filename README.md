@@ -38,17 +38,19 @@ These are design targets. They also cover newcomers, turn coordination and groun
 [Full-Duplex-Bench v1.0 and v1.5](https://github.com/kevinhu-nv/Full-Duplex-Bench-NV/blob/main/dataset/README.md) provide evaluation cases centred on one focal user and a model, with additional voices in some overlap tests. [MultiTalkFT](https://huggingface.co/datasets/MultiTalk/MultiTalkFT) is an English–Mandarin multi-speaker training corpus with per-speaker audio and word-level timing. [MultiTalk paper](https://arxiv.org/html/2609.36903v1)
 
 | Feature | Full-Duplex-Bench | MultiTalkFT | ChorusDuplex |
-| --- | --- | --- | --- |
-| Conversation setting | Focal user and assistant in the evaluation tasks | Multi-party, including one model with multiple users | 1–6 users and an assistant, optionally with a third party |
-| Backchannel and interruption | ✓ Both | ✓ Both | ✓ Both |
-| Mid-turn pause | ✓ Pause-handling task in v1.0 | ✓ Explicit silence turns | ✓ Timed pause |
-| Incomplete turn with two same-speaker fragments and a labelled hesitation boundary | — | — | ✓ `incomplete`, `parts` and pause timing |
-| Simultaneous or consecutive acknowledgements from multiple listeners to the same point | — | — | ✓ Shared host and anchor, separate timing |
-| Two users interrupting the same turn, or successive interruptions of the assistant and its follow-up | — | — | ✓ Both supported by the generator |
-| Speech addressed to a third party | ✓ Talking-to-other task in v1.5 | Addressee shifts; a separate third-party event is undocumented | ✓ `side_talk` turn and addressee |
-| Background speech with a paired clean reference | ✓ Background-speech evaluation subset in v1.5 | — | ✓ Paired dry and VOiCES-babble renderings |
+| --- | :---: | :---: | :---: |
+| Multi-party dialogue | One-to-one | ✓ | ✓ |
+| **Backchannel** | ✓ | ✓ | ✓ |
+| ↳ Multiple listeners | Unspecified | Unspecified | ✓ |
+| **Interruption** | ✓ | ✓ | ✓ |
+| ↳ Simultaneous or successive | Unspecified | Unspecified | ✓ |
+| **Incomplete turn** | ✓ | Silence turns | ✓ |
+| ↳ Two annotated fragments | Unspecified | Unspecified | ✓ |
+| ↳ Resume with a filler | Unspecified | Unspecified | ✓ |
+| Third-party exchange | ✓ | Addressee shifts | ✓ |
+| Paired background speech | ✓ | Pairing undocumented | ✓ |
 
-✓ marks a documented feature of the referenced dataset, evaluation task or generator. — means the specific feature is undocumented in the cited material. The ChorusDuplex column describes the generator and schema. Check the dataset card for published recordings and previews. [ChorusDuplex dataset](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk)
+✓ marks documented support. Unspecified means the public materials do not list a dedicated type. The comparison covers Full-Duplex-Bench v1.0 and v1.5, and the ChorusDuplex generator and schema.
 
 ChorusDuplex places short acknowledgements relative to the words already audible on the host turn. It records conversational side talk as a speaker turn and adds room chatter as a separate acoustic condition. This lets researchers study whom the assistant should respond to with or without competing voices in the room.
 
