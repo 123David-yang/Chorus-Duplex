@@ -45,8 +45,6 @@ These are design targets. They also cover newcomers, turn coordination and groun
 | **Interruption** | ✓ | ✓ | ✓ |
 | ↳ Simultaneous or successive | — | — | ✓ |
 | **Incomplete turn** | ✓ | — | ✓ |
-| ↳ Two annotated fragments | — | — | ✓ |
-| ↳ Resume with a filler | — | — | ✓ |
 | Third-party exchange | ✓ | — | ✓ |
 | Paired background speech | ✓ | — | ✓ |
 
