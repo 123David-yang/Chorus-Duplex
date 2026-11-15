@@ -6,7 +6,7 @@
 
 ChorusDuplex 构建多位说话人与语音助手共同参与的普通话合成对话。它记录谁在说、对谁说、回应哪一句，以及助手何时该开口、何时该听。每条对话配对交付干声和背景人声版本，并附上剧本与根据合成音频得到的时间线。
 
-可以试听[未完成片段](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/resolve/main/demos/incomplete-preview.wav)和[两人同时打断](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/resolve/main/demos/simultaneous-interruption.wav)。未完成样例截取了停顿附近的短片段。
+[完整对话：犹豫接话](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-hesitation-handoff.mp3) · [连续附和](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-sequential-backchannels.mp3) · [同时附和](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-simultaneous-backchannels.mp3) · [同时打断](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-simultaneous-interruption.mp3) · [附和转打断](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-backchannel-to-interruption.mp3)
 
 ## 参与框架与发言指向
 
@@ -54,8 +54,7 @@ ChorusDuplex 构建多位说话人与语音助手共同参与的普通话合成�
 | **未完成** | ✓ | — | ✓ |
 | ↳ 犹豫接话 | — | — | ✓ |
 | 背景人声配对 | ✓ | — | ✓ |
-
-<sub>✓ 支持 · — 公开资料未明确 · ✗ 明确不支持</sub>
+<div><sub>✓ 支持 · — 公开资料未明确 · ✗ 明确不支持</sub></div>
 
 ## 剧本如何产生多样性
 

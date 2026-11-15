@@ -6,7 +6,7 @@
 
 ChorusDuplex builds synthetic Mandarin conversations between a voice assistant and multiple people. It captures who is talking, whom they are addressing, what prompted each reply, and when an assistant should speak or listen. Each delivery pairs clean audio with a background-speech version and includes a script and the timing measured from the rendered audio.
 
-Listen to [an incomplete-turn excerpt](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/resolve/main/demos/incomplete-preview.wav) or [two users interrupting simultaneously](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/resolve/main/demos/simultaneous-interruption.wav). The first link plays the short excerpt around the pause.
+[Complete dialogue: hesitation handoff](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-hesitation-handoff.mp3) · [Sequential backchannels](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-sequential-backchannels.mp3) · [Simultaneous backchannels](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-simultaneous-backchannels.mp3) · [Simultaneous interruption](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-simultaneous-interruption.mp3) · [Backchannel-to-interruption](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-backchannel-to-interruption.mp3)
 
 ## Participation and addressees
 
@@ -54,8 +54,7 @@ These are design targets. They also cover newcomers, turn coordination and groun
 | **Incomplete turn** | ✓ | — | ✓ |
 | ↳ Hesitation handoff | — | — | ✓ |
 | Paired background speech | ✓ | — | ✓ |
-
-<sub>✓ Supported · — Unclear from public sources · ✗ Explicitly unsupported</sub>
+<div><sub>✓ Supported · — Unclear from public sources · ✗ Explicitly unsupported</sub></div>
 
 ## How the scripts vary
 
