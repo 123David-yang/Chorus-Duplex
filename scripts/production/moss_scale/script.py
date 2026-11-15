@@ -103,6 +103,15 @@ kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去�
         raw = chat(system, json.dumps(request, ensure_ascii=False), temperature=.95, max_tokens=7000)
         try:
             d = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
+            if hesitation_handoff:
+                for turn in d["turns"]:
+                    refs = turn["responds_to"]
+                    if refs is None:
+                        turn["responds_to"] = []
+                    elif type(refs) is int:
+                        turn["responds_to"] = [refs]
+                    if turn.get("resolution") == "assistant_handoff":
+                        turn["parts"] = [turn["text"]]
             try:
                 validate(d, users, events, group, group_interrupt, interruption_chain, hesitation_handoff=hesitation_handoff)
             except BackchannelTooLong:
