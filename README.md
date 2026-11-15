@@ -28,7 +28,8 @@ These are design targets. They also cover newcomers, turn coordination and groun
 | Ordinary speech, `speech` | A speaker takes a turn in the main conversation. |
 | Incomplete turn, `incomplete` | One speaker pauses for 0.5–2 seconds mid-thought and then continues, sometimes with a natural filler such as 嗯 or 那个. |
 | Backchannel, `backchannel` | A listener acknowledges something already said while the main speaker continues. |
-| Simultaneous or consecutive backchannels | Two listeners acknowledge the same point together or in quick succession, each with their own voice and timing. |
+| Simultaneous backchannels | Different listeners start together, using the same or different words. |
+| Sequential backchannels | One or more listeners take turns, each waiting for the previous acknowledgement to end. |
 | Interruption, `interruption` | A speaker takes the floor during an unfinished turn, reacting to something already audible. |
 | Simultaneous interruptions | Two users interrupt the same turn. |
 | Backchannel-to-interruption | A user starts with a brief acknowledgement while the assistant keeps speaking. The assistant stops at a pivot such as “but” or “wait.” Each new interrupted turn counts as a separate event. |
@@ -43,14 +44,15 @@ These are design targets. They also cover newcomers, turn coordination and groun
 | Feature | Full-Duplex-Bench | MultiTalkFT | ChorusDuplex |
 | --- | :---: | :---: | :---: |
 | Multi-party dialogue | ✗ | ✓ | ✓ |
+| Third-party exchange | ✓ | — | ✓ |
 | **Backchannel** | ✓ | ✓ | ✓ |
-| ↳ Multiple listeners | — | — | ✓ |
+| ↳ Simultaneous backchannels | — | — | ✓ |
+| ↳ Sequential backchannels | — | — | ✓ |
 | **Interruption** | ✓ | ✓ | ✓ |
 | ↳ Simultaneous interruption | — | — | ✓ |
 | ↳ Backchannel-to-interruption | — | — | ✓ |
 | **Incomplete turn** | ✓ | — | ✓ |
 | ↳ Hesitation handoff | — | — | ✓ |
-| Third-party exchange | ✓ | — | ✓ |
 | Paired background speech | ✓ | — | ✓ |
 
 ✓ Supported · — Unclear from public sources · ✗ Explicitly unsupported

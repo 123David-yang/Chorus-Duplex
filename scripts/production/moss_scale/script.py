@@ -62,7 +62,10 @@ def generate(index, root):
     ) if rng.random() < probability]
     if index == 0:
         events = ["incomplete", "backchannel"]
-    group = count >= 2 and "backchannel" in events and (index == 0 or rng.random() < .35)
+    listener_rng = random.Random(f"{ident}-listener-sequence")
+    simultaneous = index == 0 or (count >= 2 and listener_rng.random() < .5)
+    repeat_listener = not simultaneous and (count == 1 or listener_rng.random() < .4)
+    group = "backchannel" in events and (index == 0 or rng.random() < .35)
     group_interrupt = count >= 2 and "interruption" in events and rng.random() < .35
     backchannel_to_interruption = "interruption" in events and not group_interrupt and random.Random(
         f"{ident}-backchannel-to-interruption"
@@ -77,7 +80,7 @@ kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去�
 按指定事件创作，未指定事件不要硬加。普通轮次 kind=speech。助手应自然回应实际求助。"""
     event_rules = {
         "incomplete": "incomplete 是同一人话说到一半犹豫后继续说，额外给 parts 数组（2个实际说出的片段）；第二段可按语境用“嗯”“啊”“那个”“我想想”“怎么说呢”“等一下我捋捋”，也可以直接续说。语气词要符合说话人习惯，避免每条重复。随后接续前半句的意思。text 必须等于两个片段直接拼接。第一段不能是已结束的完整陈述，也不要为了插停顿无意义地口吃。",
-        "backchannel": "backchannel 紧跟被附和的主轮，addressee 指向主轮说话人，responds_to 仅包含主轮索引。额外给 anchor_text，逐字复制主轮开头直到已说出完整事实，主播仍至少有8个字可继续说。附和本身 2 到 14 个字符，用“对对”“我也觉得”“有道理”等短反馈，不加解释或新观点。例：主轮“第一趟车七点开，我们最好提前二十分钟到站。”，anchor_text 只填“第一趟车七点开”，附和 text 可填“对，我也觉得”。不要把整句主轮当作锚点。多人附和连续写不同用户，引用同一主轮和同一 anchor_text。不要把附和放在 incomplete 或被打断的轮次上。",
+        "backchannel": "backchannel 紧跟被附和的主轮，addressee 指向主轮说话人，responds_to 仅包含主轮索引。额外给 anchor_text，逐字复制主轮开头直到已说出完整事实，主播仍至少有8个字可继续说。附和本身 2 到 14 个字符，用“对对”“我也觉得”“有道理”等短反馈，不加解释或新观点。例：主轮“第一趟车七点开，我们最好提前二十分钟到站。”，anchor_text 只填“第一趟车七点开”，附和 text 可填“对，我也觉得”。不要把整句主轮当作锚点。同一组附和连续写在剧本里，引用同一主轮和同一 anchor_text。不要把附和放在 incomplete 或被打断的轮次上。",
         "interruption": "interruption 紧接被打断的轮，其上一轮写只来得及说出的半句，不补全。本轮抢话要具体回应已经听到的内容。如果要求多人抢话，连续写两位不同用户各自抢话，responds_to 都只指向同一个原发言者轮次，addressee 都指向原发言者。两人围绕同一个关键点，各只说一句自然的话。两次打断若指向不同主轮，分别标注。",
         "side_talk": "side_talk 由 third_party_01 说出，插在中段，前面有正式成员开口搭话且后续自然返回主线。第三方不进入 participants。",
     }
@@ -93,6 +96,13 @@ kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去�
             )
         else:
             system += "\n" + event_rules[event]
+    if "backchannel" in events:
+        if simultaneous:
+            system += "\n同时附和由两位不同的用户发出，合成时他们会同时开口。"
+        elif repeat_listener:
+            system += "\n连续附和：同一位用户先后两次简短表示认同。写成两个独立短反馈，措辞有自然变化，两句之间有短间隔。"
+        else:
+            system += "\n连续附和：两位不同用户先后表示认同，第二位等第一位说完再开口。"
     if backchannel_to_interruption:
         system += (
             "\n安排恰好一处附和转打断。助手先给出一个可认可的具体信息，再继续说，直到被打断。"
@@ -105,7 +115,7 @@ kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去�
         "关系": rng.choice(["邻居", "同事", "老朋友", "家人", "临时组队"]),
         "场景": rng.choice(["当面商量", "线上语音", "边做事边聊", "临出门确认安排"]),
         "轮数": turns, "用户及音色性别": {u: gender_of(mapping[u]) for u in users},
-        "必须各自有实际台词的 speaker": users + ["assistant"], "助手实际发言次数": "3到5轮", "本条事件": events, "安排一次两人附和助手": group, "安排一次两人同时抢话": group_interrupt, "安排一次附和转打断": backchannel_to_interruption,
+        "必须各自有实际台词的 speaker": users + ["assistant"], "助手实际发言次数": "3到5轮", "本条事件": events, "对助手安排一组附和": group, "安排一次两人同时抢话": group_interrupt, "安排一次附和转打断": backchannel_to_interruption,
     }
     system += "\n每段必须有至少三轮 speaker 精确写为 assistant 的真实发言。assistant 是同一场语音会话中的 AI，跟正式用户一起交谈，不加入 participants 数组。其他说话人仅使用请求给出的角色编号。指定事件必须落在独立话轮中，使用指定 kind。若指定列表为空，全部用 speech。轮数可以略微浮动。不要把主持人的反应或犹豫自动标成未指定的事件。"
     for attempt in range(2):
@@ -122,12 +132,20 @@ kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去�
                     if turn.get("resolution") == "assistant_handoff":
                         turn["parts"] = [turn["text"]]
             try:
-                validate(d, users, events, group, group_interrupt, hesitation_handoff=hesitation_handoff, backchannel_to_interruption=backchannel_to_interruption)
+                validate(
+                    d, users, events, group, group_interrupt, hesitation_handoff=hesitation_handoff,
+                    backchannel_to_interruption=backchannel_to_interruption,
+                    sequential_backchannels=not simultaneous, repeat_listener=repeat_listener,
+                )
             except BackchannelTooLong:
                 if attempt:
                     raise
                 shorten_backchannels(d)
-                validate(d, users, events, group, group_interrupt, hesitation_handoff=hesitation_handoff, backchannel_to_interruption=backchannel_to_interruption)
+                validate(
+                    d, users, events, group, group_interrupt, hesitation_handoff=hesitation_handoff,
+                    backchannel_to_interruption=backchannel_to_interruption,
+                    sequential_backchannels=not simultaneous, repeat_listener=repeat_listener,
+                )
             break
         except (ValueError, KeyError, TypeError) as exc:
             (root/"staging"/f"{ident}-text-reject-{attempt}.txt").write_text(raw,encoding="utf-8")
@@ -136,7 +154,6 @@ kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去�
             if attempt == 1:
                 raise
     d.update(dialogue_id=ident, scenario="side_talk" if "side_talk" in events else "multi_qa")
-    simultaneous = rng.random() < .5
     for i, t in enumerate(d["turns"]):
         t.update(turn_id=i, gap_before_ms=-350 if t["kind"]=="interruption" else rng.randint(140, 320),
                  insert_ratio=None, events=[], trigger="cue" if t["speaker"]=="assistant" else None)
@@ -157,7 +174,10 @@ kind 取 speech 或本次指定的事件。responds_to 是实际回应的过去�
     return d
 
 
-def validate(d, users, events, group, group_interrupt=False, *, hesitation_handoff=False, backchannel_to_interruption=False):
+def validate(
+    d, users, events, group, group_interrupt=False, *, hesitation_handoff=False,
+    backchannel_to_interruption=False, sequential_backchannels=False, repeat_listener=False,
+):
     turns = d["turns"]
     allowed = set(users) | {"assistant", "third_party_01"}
     if not 10 <= len(turns) <= 37:
@@ -226,16 +246,22 @@ def validate(d, users, events, group, group_interrupt=False, *, hesitation_hando
         if kind=="backchannel":
             anchor=t["anchor_text"]
             if (host is None or turns[host]["kind"]!="speech" or speaker==turns[host]["speaker"]
-                or refs!=[host] or targets!=[turns[host]["speaker"]] or speaker in listeners
+                or refs!=[host] or targets!=[turns[host]["speaker"]]
+                or (speaker in listeners and not sequential_backchannels)
                 or not isinstance(anchor,str) or not anchor.strip() or not turns[host]["text"].startswith(anchor)
                 or (listeners and anchor!=turns[i-1]["anchor_text"])):
-                raise ValueError(f"第{i}轮附和须回应同一主轮已说出的原文前缀，且说话人不同")
+                raise ValueError(f"第{i}轮附和须引用同一主轮和原文前缀，同时附和须由不同用户发出")
             if len(content) > 14:
                 raise BackchannelTooLong(f"第{i}轮附和 text 过长，最多14字符。请改为简短反馈。")
             if len(turns[host]["text"]) - len(anchor) < 8:
                 raise ValueError(f"第{i}轮附和锚点太晚，主轮在 anchor_text 之后必须至少还剩8字符。")
+            if listeners and turns[host]["speaker"] == "assistant":
+                previous_speaker = turns[i-1]["speaker"]
+                assistant_group |= (
+                    speaker in users and previous_speaker in users
+                    and (speaker == previous_speaker) == repeat_listener
+                )
             listeners.add(speaker)
-            assistant_group |= turns[host]["speaker"]=="assistant" and len(listeners)>=2
         else:
             if kind == "interruption":
                 previous = turns[i-1] if i else {}
@@ -256,7 +282,7 @@ def validate(d, users, events, group, group_interrupt=False, *, hesitation_hando
     if hesitation_handoff and handoffs != 1:
         raise ValueError("剧本需要恰好一处犹豫接话")
     if group and not assistant_group:
-        raise ValueError("缺少两名不同用户附和同一助手主轮")
+        raise ValueError("缺少按指定人员组合附和同一助手主轮的两个短反馈")
     if backchannel_to_interruption and transitions != 1:
         raise ValueError("剧本需要恰好一处附和转打断")
     if group_interrupt and not interrupt_group:
