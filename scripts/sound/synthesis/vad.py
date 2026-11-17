@@ -37,9 +37,9 @@ class SileroVAD:
     def __init__(self, model_path: str | Path | None = None, threshold: float = 0.5,
                  min_speech_frames: int = 3, min_silence_frames: int = 12) -> None:
         """threshold: 语音概率阈值；min_silence_frames: 合并断裂的容错（帧数）。"""
-        import os
+        from scripts.config import resolve_vad_model
 
-        model_path = model_path or os.environ.get("VAD_MODEL", MODEL_PATH)
+        model_path = model_path or resolve_vad_model()
         import onnxruntime as ort  # noqa: PLC0415
         self.session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
         self.threshold = threshold

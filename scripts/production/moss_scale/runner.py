@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 import time
 
-from scripts.config import MOSS_DIR, VAD_MODEL, load_env
+from scripts.config import MOSS_DIR, load_env, resolve_vad_model
 from scripts.production.state.lock import ProductionLock
 
 from .delivery import DeliveryIndex, background_rooms, deliver, recover_deliveries
@@ -17,24 +17,66 @@ from .render import FastSynth
 from .script import dialogue_id, generate
 
 
+def check_moss_assets(root: Path) -> list[str]:
+    """Check referenced model files exist without loading models or claiming integrity."""
+    candidates = ("browser_poc_manifest.json", "MOSS-TTS-Nano-100M-ONNX/browser_poc_manifest.json",
+                  "MOSS-TTS-Nano-ONNX-CPU/browser_poc_manifest.json")
+    manifest = next((root / name for name in candidates if (root / name).is_file()), None)
+    if manifest is None:
+        return ["MOSS ONNX models are missing; run python -m scripts.sound.tools.download_moss or set MOSS_MODEL_DIR."]
+    aliases = {"MOSS-TTS-Nano-ONNX-CPU": "MOSS-TTS-Nano-100M-ONNX",
+               "MOSS-Audio-Tokenizer-Nano-ONNX-CPU": "MOSS-Audio-Tokenizer-Nano-ONNX"}
+
+    def resolve(relative: str) -> Path:
+        candidate = manifest.parent / relative
+        if candidate.exists():
+            return candidate
+        for old, new in aliases.items():
+            if old in relative:
+                candidate = manifest.parent / relative.replace(old, new)
+                if candidate.exists():
+                    return candidate
+        return candidate
+
+    try:
+        model_files = json.loads(manifest.read_text(encoding="utf-8"))["model_files"]
+        tts_meta = resolve(model_files["tts_meta"])
+        codec_meta = resolve(model_files["codec_meta"])
+        tokenizer = resolve(model_files.get("tokenizer_model", "tokenizer.model"))
+        required = [tts_meta, codec_meta, tokenizer]
+        for meta, mandatory in ((tts_meta, ("prefill", "decode_step", "local_decoder")),
+                                (codec_meta, ("encode", "decode_full", "decode_step"))):
+            files = json.loads(meta.read_text(encoding="utf-8"))["files"]
+            if not all(isinstance(files.get(key), str) and files[key] for key in mandatory):
+                raise ValueError("required ONNX entries are missing")
+            required.extend(meta.parent / name for name in files.values() if isinstance(name, str) and name.endswith(".onnx"))
+            known_external = {
+                "moss_tts_prefill.onnx": "moss_tts_global_shared.data",
+                "moss_tts_local_decoder.onnx": "moss_tts_local_shared.data",
+                "moss_audio_tokenizer_encode.onnx": "moss_audio_tokenizer_encode.data",
+                "moss_audio_tokenizer_decode_full.onnx": "moss_audio_tokenizer_decode_shared.data",
+            }
+            required.extend(meta.parent / data for graph, data in known_external.items() if graph in files.values())
+        missing = [path.name for path in required if not path.is_file() or path.stat().st_size == 0]
+        return ["MOSS model files missing or empty: " + ", ".join(sorted(set(missing)))] if missing else []
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return ["MOSS model metadata is missing or invalid; rerun the model downloader."]
+
+
 def check_inputs():
     errors = []
     backend = os.environ.get("TTS_BACKEND", "moss_onnx")
     device = os.environ.get("TTS_DEVICE", "cpu").lower()
     if backend == "moss_onnx":
+        for module in ("onnxruntime", "sentencepiece"):
+            if importlib.util.find_spec(module) is None:
+                errors.append(f"MOSS requires the {module} Python package.")
         runtime = Path(os.environ.get("MOSS_DIR", MOSS_DIR))
         if not (runtime / "onnx_tts_runtime.py").is_file():
             errors.append("MOSS_DIR must point to a checkout containing onnx_tts_runtime.py.")
-        model_dir = os.environ.get("MOSS_MODEL_DIR")
-        if model_dir:
-            model_root = Path(model_dir).expanduser()
-            manifest_paths = (
-                "browser_poc_manifest.json",
-                "MOSS-TTS-Nano-100M-ONNX/browser_poc_manifest.json",
-                "MOSS-TTS-Nano-ONNX-CPU/browser_poc_manifest.json",
-            )
-            if not any((model_root / name).is_file() for name in manifest_paths):
-                errors.append("MOSS_MODEL_DIR must contain the ONNX browser_poc_manifest.json.")
+        from .config import moss_model_root
+        model_root = moss_model_root(runtime)
+        errors.extend(check_moss_assets(model_root))
         if device in ("cuda", "cuda:0", "gpu"):
             try:
                 import onnxruntime as ort
@@ -60,9 +102,18 @@ def check_inputs():
     elif backend == "kokoro":
         if device != "cpu":
             errors.append("Kokoro uses CPU here; configure OpenVINO device separately.")
+        if importlib.util.find_spec("sherpa_onnx") is None:
+            errors.append("Kokoro requires the sherpa_onnx Python package.")
+        from .config import kokoro_model_root
+        folder = kokoro_model_root()
+        required = ("voices.bin", "tokens.txt", "lexicon-us-en.txt", "lexicon-zh.txt")
+        if not any((folder / model).is_file() for model in ("model.onnx", "model.int8.onnx")) or any(
+            not (folder / name).is_file() for name in required
+        ):
+            errors.append("Kokoro model assets are missing; set KOKORO_MODEL_DIR to a complete model directory.")
     elif ":" not in backend:
         errors.append("TTS_BACKEND must be moss_onnx, qwen3, kokoro, or module:factory.")
-    if not Path(os.environ.get("VAD_MODEL", VAD_MODEL)).is_file():
+    if not resolve_vad_model().is_file():
         errors.append("VAD_MODEL must point to a Silero VAD ONNX file.")
     if not os.environ.get("LLM_API_KEY"):
         errors.append("LLM_API_KEY is missing.")
@@ -101,9 +152,6 @@ def main():
     os.environ.update(TTS_STRICT="1", MOSS_TEXT_LANGUAGE=args.language)
     if args.tts_device is not None:
         os.environ["TTS_DEVICE"] = args.tts_device
-    legacy_moss = Path("D:/Project_Vibe/moss-tts-official")
-    if legacy_moss.is_dir():
-        os.environ.setdefault("MOSS_DIR", str(legacy_moss))
     legacy_voices = resources_root() / "voices/AISHELL-3/manifest.json"
     if legacy_voices.is_file() and not os.environ.get("VOICE_REGISTRY"):
         os.environ.setdefault("VOICE_MANIFEST", str(legacy_voices))

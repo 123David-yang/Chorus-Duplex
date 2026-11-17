@@ -78,16 +78,32 @@ def choice_option_sets(language, topic):
     return (first, second)
 
 
-def choice_setup_text(language, choices):
+def choice_setup_texts(language, choices):
     if language == "en":
-        return "Which option does each of you prefer?"
-    return "你们各自更倾向哪一个？"
+        return ("Which option does each of you prefer?", "What does each of you prefer?",
+                "I'd like to hear each of your preferences.", "Which would each of you choose?")
+    return ("你们各自更倾向哪一个？", "你们俩分别想选哪个？",
+            "我先听听你们各自的想法。", "你们分别更喜欢哪个方案？")
+
+
+def choice_setup_text(language, choices):
+    return choice_setup_texts(language, choices)[0]
+
+
+def choice_request_texts(language, choices):
+    if language == "en":
+        return (f"Can you help us choose whether to {choices[0]} or {choices[1]}?",
+                f"Should we {choices[0]} or {choices[1]}? Can you help us decide?",
+                f"We're choosing whether to {choices[0]} or {choices[1]}. What do you think?",
+                f"Could you help us decide whether to {choices[0]} or {choices[1]}?")
+    return (f"我们{choices[0]}还是{choices[1]}，你能帮我们选一下吗？",
+            f"你帮我们看看，是{choices[0]}好，还是{choices[1]}好？",
+            f"我们在{choices[0]}和{choices[1]}之间犹豫，你有什么建议？",
+            f"{choices[0]}或者{choices[1]}，你能帮我们拿个主意吗？")
 
 
 def choice_request_text(language, choices):
-    if language == "en":
-        return f"Can you help us choose whether to {choices[0]} or {choices[1]}?"
-    return f"我们{choices[0]}还是{choices[1]}，你能帮我们选一下吗？"
+    return choice_request_texts(language, choices)[0]
 
 
 CONFLICTING_CHOICES = {
@@ -96,27 +112,41 @@ CONFLICTING_CHOICES = {
         ("我觉得第一个更合适。", "我想选第二个。"),
         ("第一个对我来说比较好。", "第二个比较适合我。"),
         ("我倾向第一个方案。", "我倾向第二个方案。"),
+        ("我想选第一种。", "我倒觉得第二种好。"),
+        ("第一个听起来更合适。", "我更中意第二个。"),
+        ("我的话会选第一个。", "我还是想选第二个。"),
+        ("我觉得第一种挺好。", "我比较喜欢第二种。"),
     ),
     "en": (
         ("I prefer the first option.", "I'd choose the second one."),
         ("Let's go with the first one.", "The second option works better for me."),
         ("I vote for option one.", "I'd rather pick option two."),
         ("The first choice suits me.", "I prefer the second choice."),
+        ("I'd go with the first one.", "The second sounds better to me."),
+        ("Option one makes more sense to me.", "I'd rather go with option two."),
+        ("My vote is for the first choice.", "I'm leaning toward the second."),
+        ("I'd pick the first.", "I like the second one better."),
     ),
 }
 CONFLICT_CLARIFICATIONS = {
-    "zh": ("我听到了两个不同的选择，你们想选哪一个？", "你们想选的不一样，我们先确定用哪个方案？"),
+    "zh": ("我听到了两个不同的选择，你们想选哪一个？", "你们想选的不一样，我们先确定用哪个方案？",
+           "你们的偏好不同，要先确定采用哪一个吗？", "一个选第一种，一个选第二种，接下来按哪个来？"),
     "en": ("I heard two different preferences. Which option should we choose?",
-           "You prefer different options. Which one would you like to go with?"),
+           "You prefer different options. Which one would you like to go with?",
+           "I heard two different choices. Which should we settle on?",
+           "You each prefer a different option. What would you like to choose?"),
 }
 CHOICE_RESOLUTIONS = {
-    "zh": (("那就按第一个方案吧。", "好，我选第一个。"),
-           ("那就按第二个方案吧。", "好，我选第二个。")),
-    "en": (("Let's go with the first option.", "I'll choose the first one."),
-           ("Let's go with the second option.", "I'll choose the second one.")),
+    "zh": (("那就按第一个方案吧。", "好，我选第一个。", "那先选第一种吧。", "我们就用第一个方案。"),
+           ("那就按第二个方案吧。", "好，我选第二个。", "那先选第二种吧。", "我们就用第二个方案。")),
+    "en": (("Let's go with the first option.", "I'll choose the first one.", "Let's pick option one.", "The first choice it is."),
+           ("Let's go with the second option.", "I'll choose the second one.", "Let's pick option two.", "The second choice it is.")),
 }
 CHOICE_CONFIRMATIONS = {
-    "zh": ("好，我就按照你选择的方案给出建议。", "明白，我会基于你选的方案提供建议。"),
+    "zh": ("好，我就按照你选择的方案给出建议。", "明白，我会基于你选的方案提供建议。",
+           "好，那我们就按这个选择继续讨论。", "了解，接下来就围绕这个方案来看。"),
     "en": ("Got it. I'll base my suggestions on the option you chose.",
-           "Okay, I'll give suggestions based on your choice."),
+           "Okay, I'll give suggestions based on your choice.",
+           "All right, let's continue with that choice.",
+           "Understood. I'll focus on the option you selected."),
 }

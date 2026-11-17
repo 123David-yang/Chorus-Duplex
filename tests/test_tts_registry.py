@@ -124,6 +124,136 @@ class VoiceRegistryTests(unittest.TestCase):
 
 
 class BackendTests(unittest.TestCase):
+    def test_kokoro_model_root_honors_shared_resource_directory_and_override(self):
+        from scripts.production.moss_scale.config import kokoro_model_root
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            with patch.dict(os.environ, {"DUPLEX_RESOURCES_DIR": str(root)}, clear=True):
+                self.assertEqual(kokoro_model_root(), root / "models" / "kokoro-multi-lang-v1_1")
+                os.environ["KOKORO_MODEL_DIR"] = str(root / "custom")
+                self.assertEqual(kokoro_model_root(), root / "custom")
+
+    def test_preflight_reports_missing_backend_dependencies(self):
+        from scripts.production.moss_scale.runner import check_inputs
+        with TemporaryDirectory() as folder, patch("importlib.util.find_spec", return_value=None):
+            with patch.dict(os.environ, {"TTS_BACKEND": "moss_onnx", "MOSS_MODEL_DIR": folder}, clear=True):
+                self.assertIn("MOSS requires the onnxruntime Python package.", check_inputs())
+            with patch.dict(os.environ, {"TTS_BACKEND": "kokoro", "KOKORO_MODEL_DIR": folder}, clear=True):
+                errors = check_inputs()
+                self.assertIn("Kokoro requires the sherpa_onnx Python package.", errors)
+                self.assertTrue(any("Kokoro model assets are missing" in error for error in errors))
+
+    def test_explicit_resources_choose_the_matching_background_directory(self):
+        from scripts.config import resolve_background_root
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            with patch.dict(os.environ, {"DUPLEX_RESOURCES_DIR": str(root)}, clear=True), \
+                 patch.object(Path, "is_dir", return_value=True):
+                self.assertEqual(resolve_background_root(), root / "background" / "voices_babble")
+                os.environ["BG_SOURCE_DIR"] = str(root / "custom")
+                self.assertEqual(resolve_background_root(), root / "custom")
+
+    def test_moss_preflight_detects_missing_external_weights(self):
+        from scripts.production.moss_scale.runner import check_moss_assets
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            manifest = {"model_files": {"tts_meta": "tts.json", "codec_meta": "codec.json", "tokenizer_model": "tokenizer.model"}}
+            tts_files = {"prefill": "moss_tts_prefill.onnx", "decode_step": "decode.onnx", "local_decoder": "local.onnx"}
+            codec_files = {"encode": "encode.onnx", "decode_full": "decode_full.onnx", "decode_step": "decode_step.onnx"}
+            (root / "browser_poc_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            (root / "tts.json").write_text(json.dumps({"files": tts_files}), encoding="utf-8")
+            (root / "codec.json").write_text(json.dumps({"files": codec_files}), encoding="utf-8")
+            for name in (*tts_files.values(), *codec_files.values(), "tokenizer.model"):
+                (root / name).write_bytes(b"x")
+            self.assertIn("moss_tts_global_shared.data", " ".join(check_moss_assets(root)))
+            (root / "moss_tts_global_shared.data").write_bytes(b"x")
+            self.assertEqual(check_moss_assets(root), [])
+
+    def test_verified_asset_install_recovers_from_failed_publish(self):
+        import hashlib
+        from scripts.sound.tools.verified_download import install_verified
+        data = b"test asset"
+        digest = hashlib.sha256(data).hexdigest()
+        with TemporaryDirectory() as folder:
+            destination = Path(folder) / "model.bin"
+            with patch("urllib.request.urlopen", side_effect=lambda *a, **k: io.BytesIO(data)):
+                with patch("os.link", side_effect=OSError("interrupted")):
+                    with self.assertRaises(OSError):
+                        install_verified("https://example.test/file", destination, digest, 100)
+                self.assertFalse(destination.exists())
+                self.assertEqual(list(Path(folder).glob(".download-*.tmp")), [])
+                self.assertEqual(install_verified("https://example.test/file", destination, digest, 100), destination)
+                self.assertEqual(destination.read_bytes(), data)
+                self.assertEqual(install_verified("https://example.test/file", destination, digest, 100), destination)
+                with self.assertRaises(FileExistsError):
+                    install_verified("https://example.test/file", destination, "0" * 64, 100)
+                self.assertEqual(destination.read_bytes(), data)
+
+    def test_moss_download_cache_follows_resources_and_respects_override(self):
+        from scripts.sound.tools import download_moss
+        calls = []
+        sdk = types.SimpleNamespace(snapshot_download=lambda **kwargs: calls.append(kwargs))
+        with TemporaryDirectory() as folder, patch.dict(sys.modules, {"huggingface_hub": sdk}):
+            root = Path(folder)
+            with patch.dict(os.environ, {"DUPLEX_RESOURCES_DIR": str(root)}, clear=True):
+                download_moss.download(root / "models")
+                self.assertTrue(Path(os.environ["HF_XET_CACHE"]).is_relative_to(root))
+                self.assertEqual(len(calls), 2)
+            with patch.dict(os.environ, {"DUPLEX_RESOURCES_DIR": str(root), "HF_XET_CACHE": "custom-cache"}, clear=True):
+                download_moss.download(root / "models")
+                self.assertEqual(os.environ["HF_XET_CACHE"], "custom-cache")
+
+    def test_bundled_moss_reference_loader_resamples_stereo(self):
+        import importlib
+        import soundfile as sf
+        runtime_path = Path(__file__).resolve().parents[1] / "scripts" / "sound" / "moss_runtime"
+        with TemporaryDirectory() as folder, patch.object(sys, "path", [str(runtime_path), *sys.path]):
+            audio_path = Path(folder) / "reference.wav"
+            sf.write(audio_path, np.column_stack((np.full(800, .2), np.full(800, -.1))), 8000)
+            runtime_cls = importlib.import_module("onnx_tts_runtime").OnnxTtsRuntime
+            runtime = object.__new__(runtime_cls)
+            runtime.codec_meta = {"codec_config": {"sample_rate": 16000, "channels": 1}}
+            audio = runtime._load_reference_audio(audio_path)
+        self.assertEqual(audio.shape, (1, 1, 1600))
+        self.assertEqual(audio.dtype, np.float32)
+        self.assertTrue(audio.flags.c_contiguous)
+        self.assertTrue(np.isfinite(audio).all())
+        self.assertAlmostEqual(float(audio.mean()), .05, places=2)
+
+    def test_environment_loaded_after_import_selects_pinned_vad(self):
+        from scripts import config
+        from scripts.sound.synthesis.vad import SileroVAD
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            legacy = root / "legacy.onnx"
+            legacy.touch()
+            pinned = root / "resources" / "models" / "silero_vad_v512.onnx"
+            pinned.parent.mkdir(parents=True)
+            pinned.touch()
+            env_file = root / "test.env"
+            env_file.write_text(f"DUPLEX_RESOURCES_DIR={root / 'resources'}\n", encoding="utf-8")
+            inputs = [types.SimpleNamespace(name=name) for name in ("input", "state", "sr")]
+            outputs = [types.SimpleNamespace(name=name) for name in ("output", "stateN")]
+            session = types.SimpleNamespace(get_inputs=lambda: inputs, get_outputs=lambda: outputs)
+            with patch.dict(os.environ, {}, clear=True), patch.object(config, "_legacy_vad", legacy):
+                config.load_env(env_file)
+                self.assertEqual(config.resolve_vad_model(), pinned)
+                with patch("onnxruntime.InferenceSession", return_value=session) as create_session:
+                    SileroVAD()
+                self.assertEqual(create_session.call_args.args[0], str(pinned))
+                os.environ["VAD_MODEL"] = str(legacy)
+                self.assertEqual(config.resolve_vad_model(), legacy)
+
+    def test_production_entry_does_not_override_the_bundled_runtime(self):
+        from scripts.production.moss_scale import runner
+        seen = []
+        with patch.dict(os.environ, {}, clear=True), patch.object(runner, "load_env"), \
+             patch.object(Path, "is_dir", return_value=True), \
+             patch.object(sys, "argv", ["scale_moss", "--check"]), \
+             patch.object(runner, "check_inputs", side_effect=lambda: seen.append(os.environ.get("MOSS_DIR")) or []):
+            runner.main()
+        self.assertEqual(seen, [None])
+
     def test_production_entry_respects_backend_and_device(self):
         from scripts.production.moss_scale import runner
         seen = []

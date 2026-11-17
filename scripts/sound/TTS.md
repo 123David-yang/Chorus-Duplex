@@ -1,5 +1,36 @@
 # TTS 模型与音色
 
+## 准备环境
+
+在 Python 3.12 虚拟环境中，CPU 使用 `pip install -r requirements-moss.txt`。
+干净 CPU 环境的端到端测试在 Windows x64 完成；当前固定的 ONNX Runtime 版本没有 Intel macOS 的 CPython 3.12 wheel。
+CUDA 13 / cuDNN 9 环境使用 `requirements-moss-gpu.txt`，不要在同一环境同时安装 CPU 和 GPU 两种 ONNX Runtime。
+Linux GPU 实例已测试 MOSS 推理，但尚未验证仅凭该 GPU 依赖清单从零安装。
+CUDA/cuDNN 动态库必须与所选 ONNX Runtime 兼容；必要时参考
+[ONNX Runtime 官方安装说明](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html)。
+
+将仓库根目录的 `.env.example` 复制成 `.env`，填写剧本服务的 `LLM_API_KEY`、`LLM_BASE_URL` 和 `LLM_MODEL`。不要提交或公开 `.env`。
+
+下载公开模型和测试素材：
+
+```bash
+python -m scripts.sound.tools.download_moss
+python -m scripts.sound.tools.download_vad
+python -m scripts.sound.tools.download_background_sample
+```
+
+MOSS 权重固定到上游修订版；Silero VAD 默认优先使用下载的 v5.1.2 并校验 SHA-256，尚未下载时兼容旧版路径。
+仓库附带经过测试的轻量 MOSS ONNX 运行时及其 Apache-2.0 许可，无需另行复制本机运行时。
+`download_background_sample` 只下载一个约五秒的 VOiCES 片段，适合冒烟测试；
+正式生产应从 [VOiCES 原始数据](https://iqtlabs.github.io/voices/downloads/)准备多样化素材，
+按 `rm*/babb/*.wav` 组织并通过 `BG_SOURCE_DIR` 指定，保留 CC BY 4.0 署名。
+默认资源根可通过 `DUPLEX_RESOURCES_DIR` 修改；在 Windows 上默认为 D 盘。模型下载的 HF 缓存默认也位于资源根内，已设置的 HF 缓存环境变量优先。
+模型、VAD 和背景素材可分别通过 `MOSS_MODEL_DIR`、`VAD_MODEL` 和 `BG_SOURCE_DIR` 覆盖。
+模型下载器默认使用 `MOSS_MODEL_DIR`（如已设置）；VAD 和背景测试片段的下载器默认写入资源根。如需直接下载到自定义位置，分别传 `download_vad --output PATH`、`download_background_sample --output-root DIR`，或将运行时配置指向默认下载位置。
+两个小素材安装器通过同目录临时文件和不覆盖操作完成发布；非 Windows 系统上的目标文件系统需支持硬链接。
+
+## 选择模型和设备
+
 生产入口默认使用 MOSS ONNX、CPU 和固定的 `Junhao` 助手音色。可以选择后端、设备和中英文：
 
 ```bash
@@ -8,7 +39,11 @@ python -m scripts.production.scale_moss --tts-backend moss_onnx --tts-device cpu
 python -m scripts.production.scale_moss --tts-backend moss_onnx --tts-device cuda --language en --root /path/to/output --hours 0.05
 ```
 
-CUDA 需要包含 CUDAExecutionProvider 的 ONNX Runtime 和兼容的 CUDA/cuDNN 环境。MOSS 模型运行时从 `MOSS_DIR` 加载，模型目录可通过 `MOSS_MODEL_DIR` 指定。请求 CUDA 时，运行时无法使用 CUDA 会报错。当前 ONNX 适配器支持 `cpu`、`cuda` 和 `cuda:0`，多卡设备选择需要运行时进一步支持。
+CUDA 需要包含 CUDAExecutionProvider 的 ONNX Runtime 和兼容的 CUDA/cuDNN 环境。默认加载仓库内的 MOSS ONNX 运行时；`MOSS_DIR` 和 `MOSS_MODEL_DIR` 可分别覆盖运行时及模型目录。请求 CUDA 时，运行时无法使用 CUDA 会报错。当前 ONNX 适配器支持 `cpu`、`cuda` 和 `cuda:0`，多卡设备选择需要运行时进一步支持。
+
+`--check` 检查必需路径和已知权重文件是否存在，不校验所有权重内容，也不创建 CUDA session；首次使用 GPU 仍需运行小样本确认 CUDA 与 cuDNN 可用。
+
+如通过 `MOSS_DIR` 指向未修改的上游运行时，按该运行时版本另行安装所需的 PyTorch/torchaudio；仓库附带的运行时不需要它们。
 
 `--tts-backend` 支持 `moss_onnx`、`qwen3`、`kokoro` 或实现 `synthesize(text, voice, reference_audio, max_seconds)` 的 `module:factory`。自定义后端使用下方的 `VOICE_REGISTRY` 注册音色。也可用 `TTS_BACKEND` 和 `TTS_DEVICE` 设置默认值，命令行参数优先。旧剧本会保留原来的模型与音色信息，切换模型应使用新目录和新剧本。
 

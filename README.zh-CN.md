@@ -93,16 +93,22 @@ cd Chorus-Duplex
 python -m pip install -r requirements-moss.txt
 ```
 
-在同一个 Python 环境里，按所用 MOSS 运行时版本的说明安装依赖。本仓库的 `requirements-moss.txt` 列出已验证的 CPU 链路依赖。如果所用的 MOSS 代码会导入 PyTorch 或 torchaudio，即便用 CPU 推理，也要安装对应的兼容包。[MOSS ONNX 安装说明](https://github.com/OpenMOSS/MOSS-TTS-Nano#onnx-cpu-inference)
+已验证的 CPU 链路默认使用仓库附带的 MOSS ONNX 运行时。下载固定版本模型、Silero VAD 和一段背景测试素材：
 
-下载 [TTS 权重](https://huggingface.co/OpenMOSS-Team/MOSS-TTS-Nano-100M-ONNX)和[音频分词器权重](https://huggingface.co/OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX)。把 `MOSS_MODEL_DIR` 指向它们的共同父目录，里面应有 `MOSS-TTS-Nano-100M-ONNX/` 和 `MOSS-Audio-Tokenizer-Nano-ONNX/`，保留各目录中的相对路径及文件名。
+```bash
+python -m scripts.sound.tools.download_moss
+python -m scripts.sound.tools.download_vad
+python -m scripts.sound.tools.download_background_sample
+```
+
+这段约五秒的 VOiCES 人声仅用于冒烟测试；正式生产应准备多样且许可合适的背景素材。可用 `DUPLEX_RESOURCES_DIR` 指定模型与缓存的位置。
 
 把 [`.env.example`](.env.example) 复制为 `.env`。Windows PowerShell 用 `Copy-Item .env.example .env`，macOS 或 Linux 用 `cp .env.example .env`。然后填写本地配置。
 
 | 配置项 | 填写内容 |
 | --- | --- |
 | `LLM_BASE_URL`、`LLM_MODEL`、`LLM_API_KEY` | Chat Completions API 基础地址、模型名和密钥。客户端会拼接 `/chat/completions`。 |
-| `MOSS_DIR`、`MOSS_MODEL_DIR` | 含 `onnx_tts_runtime.py` 的 [MOSS-TTS-Nano ONNX](https://github.com/OpenMOSS/MOSS-TTS-Nano) 运行时目录，以及本地模型目录。 |
+| `MOSS_DIR`、`MOSS_MODEL_DIR` | 可选：分别覆盖仓库内运行时与下载的模型目录。 |
 | `VAD_MODEL` | 兼容的 [Silero VAD](https://github.com/snakers4/silero-vad) ONNX 文件。 |
 | `BG_SOURCE_DIR` | [VOiCES](https://registry.opendata.aws/lab41-voices/) 素材根目录，素材放在 `rm*/babb/*.wav`。 |
 | `VOICE_MANIFEST` | 可选音色参考清单。格式为 `schema_version: 1` 和 `voices` 数组，每项包含 `id`、`gender`、`reference_audio`、`source_url`、`license` 和 `sha256`。相对 WAV 路径以清单所在目录为基准。 |
@@ -113,7 +119,7 @@ python -m scripts.production.scale_moss --check
 python -m scripts.production.scale_moss --root output/moss --hours 0.05
 ```
 
-已测试的 CUDA 运行使用了适配过的 MOSS ONNX 运行时；官方原版运行时在全新环境下仍需进一步验证。使用 GPU 时需安装与 CUDA 匹配的 ONNX Runtime GPU 版本，替代 CPU 版本，并按上游说明安装运行时依赖。
+GPU 环境使用 `requirements-moss-gpu.txt`，不要与 CPU 依赖文件混装。已在 AutoDL Linux 实例验证 CUDA 推理，但尚未验证仅凭该依赖文件从零安装。`--check` 不创建 CUDA session，首次使用请先运行一条小样。
 
 生成英文时加 `--language en`；CUDA 环境配置完成后可选择 `--tts-backend moss_onnx --tts-device cuda`。多 TTS 后端、固定助手音色与参考音色见[音色配置说明](scripts/sound/TTS.md)。
 

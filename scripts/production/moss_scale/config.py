@@ -10,9 +10,27 @@ def resources_root() -> Path:
     return Path(os.environ.get("DUPLEX_RESOURCES_DIR", str(default))).expanduser()
 
 
+
+def moss_model_root(runtime_dir: Path | None = None) -> Path:
+    explicit = os.environ.get("MOSS_MODEL_DIR")
+    if explicit:
+        return Path(explicit).expanduser()
+    portable = resources_root() / "models" / "moss-tts-nano-onnx"
+    if portable.is_dir():
+        return portable
+    if runtime_dir is None:
+        from scripts.config import MOSS_DIR
+        runtime_dir = MOSS_DIR
+    return Path(runtime_dir) / "models"
+
+
 def background_root() -> Path:
-    default = Path("D:/DuplexVoice_downloads/VOICES_babble/data") if os.name == "nt" else ROOT / "data" / "voices_babble"
-    return Path(os.environ.get("BG_SOURCE_DIR", str(default))).expanduser()
+    from scripts.config import resolve_background_root
+    return resolve_background_root()
+
+
+def kokoro_model_root() -> Path:
+    return Path(os.environ.get("KOKORO_MODEL_DIR", str(resources_root() / "models" / "kokoro-multi-lang-v1_1"))).expanduser()
 
 
 def default_output_root() -> Path:

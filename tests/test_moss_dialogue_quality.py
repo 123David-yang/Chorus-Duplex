@@ -27,10 +27,10 @@ class FakeSynth:
         return np.full(24000, 0.1, dtype=np.float32)
 
 
-def draft(language, mode):
+def draft(language, mode, seed=15):
     users = ["user_01", "user_02"]
     slots = plan_slots(users, ["simultaneous_requests"], False, False, False,
-                       False, False, random.Random(15), 12, language)
+                       False, False, random.Random(seed), 12, language)
     context = {"场景": "planning", "领域": "travel", "关系": "friends"}
 
     def chat(system, request, **kwargs):
@@ -66,6 +66,17 @@ def draft(language, mode):
 
 
 class DialogueQualityTests(unittest.TestCase):
+    def test_simultaneous_choice_templates_vary_and_remain_valid(self):
+        for language in ("zh", "en"):
+            seen = {"choice_request": set(), "choice_setup": set(), "choice_confirmation": set()}
+            for seed in range(40):
+                dialogue = draft(language, "direct", seed=seed)
+                for turn in dialogue["turns"]:
+                    if turn.get("interaction") in seen:
+                        seen[turn["interaction"]].add(turn["text"])
+            for interaction, texts in seen.items():
+                self.assertGreaterEqual(len(texts), 3, (language, interaction))
+
     def test_each_supported_topic_has_two_distinct_option_pairs(self):
         for language in ("zh", "en"):
             self.assertEqual(set(CHOICE_OPTIONS[language]), set(ALTERNATE_CHOICES[language]))
@@ -112,6 +123,23 @@ class DialogueQualityTests(unittest.TestCase):
         second["speaker"] = first["speaker"]
         with self.assertRaises(ValueError):
             validate(dialogue, ["user_01", "user_02"], [], False, simultaneous_requests=True)
+
+    def test_audit_rejects_contradictory_choice_or_wrong_confirmation_addressee(self):
+        for language in ("zh", "en"):
+            dialogue = draft(language, "direct")
+            resolution = next(t for t in dialogue["turns"] if t.get("interaction") == "choice_resolution")
+            selected = resolution["choice_index"]
+            resolution["text"] = (("我选第二个。", "我选第一个。") if language == "zh"
+                                  else ("I'll choose the second option.", "I'll choose the first option."))[selected]
+            report = audit(Dialogue.from_jsonl_line(json.dumps(dialogue)))
+            self.assertIn("invalid_simultaneous_requests", {issue["code"] for issue in report["issues"]})
+
+            dialogue = draft(language, "direct")
+            resolution = next(t for t in dialogue["turns"] if t.get("interaction") == "choice_resolution")
+            confirmation = next(t for t in dialogue["turns"] if t.get("interaction") == "choice_confirmation")
+            confirmation["addressee"] = next(user for user in ("user_01", "user_02") if user != resolution["speaker"])
+            report = audit(Dialogue.from_jsonl_line(json.dumps(dialogue)))
+            self.assertIn("invalid_simultaneous_requests", {issue["code"] for issue in report["issues"]})
 
     def test_quality_rejects_unpaired_or_nonoverlapping_requests(self):
         dialogue = draft("en", "direct")

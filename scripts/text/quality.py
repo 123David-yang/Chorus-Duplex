@@ -23,6 +23,7 @@ def rules_block(dialogue_id: str = "", turns: int = 12) -> str:
     bc_policy = "AI 必须完成一次指向它的附和。" if "ai_backchannel" in required else "本条 AI 不做 backchannel，附和由其他用户承担；AI 留出轮数完成主模块。"
     return """
 【双工质量契约 v3，优先于泛化示例】
+- 事实性建议应符合已知条件；不确定时说明条件或保持审慎，不保证收益、安全或其他无法确认的结果。
 - 台词的知识只能来自该轮之前已说出口的历史。人设/导演计划属于私有资料；
   assistant 不得从中得知姓名、职业、经历。用户也只能知道自己的私有背景。
   用户自我介绍或别人先自然喊出名字后，assistant 才能使用该称呼。首次引入姓名
@@ -90,6 +91,13 @@ def repeated_incomplete_start(parts):
     return len(prefix) >= threshold
 
 
+def explicit_choice_index(text: str) -> int | None:
+    """Recognize unambiguous ordinal choices; other phrasing needs semantic review."""
+    first = re.search(r"第\s*[一1]\s*(?:个|种|项)|方案\s*[一1]|\b(?:first(?:\s+(?:option|choice|one))?|option\s+(?:one|1))\b", text, re.I)
+    second = re.search(r"第\s*[二2]\s*(?:个|种|项)|方案\s*[二2]|\b(?:second(?:\s+(?:option|choice|one))?|option\s+(?:two|2))\b", text, re.I)
+    return (0 if first else 1) if bool(first) != bool(second) else None
+
+
 def ai_request_candidates(d):
     english_requests = re.compile(
         r"\b(?:can you|could you|would you|please|help (?:me|us)|tell me|show me|"
@@ -147,6 +155,18 @@ def audit(d: Dialogue, required: list[str] | None = None) -> dict:
         if t.interaction == "choice_resolution":
             if type(t.choice_index) is not int or t.choice_index not in (0, 1):
                 flag("invalid_simultaneous_requests", i, "resolution must select one of the two options")
+            else:
+                stated = explicit_choice_index(t.text)
+                if stated is not None and stated != t.choice_index:
+                    flag("invalid_simultaneous_requests", i, "spoken choice contradicts choice_index")
+                elif stated is None:
+                    warnings.append({"code": "choice_semantics_unverified", "turn_id": i,
+                                     "detail": "cannot verify the selected option from explicit ordinal wording"})
+        if t.interaction == "choice_confirmation":
+            addresses = t.addressee if isinstance(t.addressee, list) else [t.addressee]
+            if (i == 0 or d.turns[i-1].interaction != "choice_resolution"
+                    or not ({d.turns[i-1].speaker, "all"} & set(addresses))):
+                flag("invalid_simultaneous_requests", i, "confirmation must address the deciding user or everyone")
         addr = t.addressee if isinstance(t.addressee, list) else [t.addressee]
         if not addr or any(a not in valid | {"third_party", "all", "none"} for a in addr):
             flag("invalid_addressee", i, str(addr))

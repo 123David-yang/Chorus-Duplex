@@ -93,16 +93,22 @@ cd Chorus-Duplex
 python -m pip install -r requirements-moss.txt
 ```
 
-Install the MOSS runtime's dependencies in the same Python environment using the instructions for the checkout you use. The pinned `requirements-moss.txt` covers the tested CPU pipeline. A MOSS checkout that imports PyTorch or torchaudio also needs compatible packages, even when inference runs on CPU. [MOSS ONNX setup](https://github.com/OpenMOSS/MOSS-TTS-Nano#onnx-cpu-inference)
+The tested CPU setup uses the bundled MOSS ONNX runtime. Download the pinned models, Silero VAD and one background sample:
 
-Download the [TTS weights](https://huggingface.co/OpenMOSS-Team/MOSS-TTS-Nano-100M-ONNX) and [audio tokenizer weights](https://huggingface.co/OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX). Set `MOSS_MODEL_DIR` to their shared parent, containing `MOSS-TTS-Nano-100M-ONNX/` and `MOSS-Audio-Tokenizer-Nano-ONNX/`. Keep the relative filenames within each directory.
+```bash
+python -m scripts.sound.tools.download_moss
+python -m scripts.sound.tools.download_vad
+python -m scripts.sound.tools.download_background_sample
+```
+
+The five-second VOiCES sample is only for a smoke test. Supply a varied licensed background corpus for production. Set `DUPLEX_RESOURCES_DIR` to place models and caches elsewhere.
 
 Copy [`.env.example`](.env.example) to `.env`. In Windows PowerShell use `Copy-Item .env.example .env`; on macOS or Linux use `cp .env.example .env`. Fill in the local settings.
 
 | Setting | Required input |
 | --- | --- |
 | `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | Chat Completions API base URL, model ID and key. The client appends `/chat/completions`. |
-| `MOSS_DIR`, `MOSS_MODEL_DIR` | [MOSS-TTS-Nano ONNX](https://github.com/OpenMOSS/MOSS-TTS-Nano) runtime checkout containing `onnx_tts_runtime.py` and the local model directory. |
+| `MOSS_DIR`, `MOSS_MODEL_DIR` | Optional overrides for the bundled runtime and downloaded model directory. |
 | `VAD_MODEL` | Path to a compatible [Silero VAD](https://github.com/snakers4/silero-vad) ONNX file. |
 | `BG_SOURCE_DIR` | [VOiCES](https://registry.opendata.aws/lab41-voices/) clips under `rm*/babb/*.wav`. |
 | `VOICE_MANIFEST` | Optional reference voices. Use `schema_version: 1` and a `voices` array. Each item has `id`, `gender`, `reference_audio`, `source_url`, `license` and `sha256`. Relative WAV paths resolve from the manifest directory. |
@@ -113,7 +119,7 @@ python -m scripts.production.scale_moss --check
 python -m scripts.production.scale_moss --root output/moss --hours 0.05
 ```
 
-The tested CUDA run used an adapted MOSS ONNX runtime; a clean installation of the unmodified upstream runtime still needs validation. Install a CUDA-compatible ONNX Runtime GPU package in place of the CPU package and follow the upstream runtime's dependency instructions.
+For GPU use `requirements-moss-gpu.txt` instead of the CPU dependency file. CUDA inference has been tested on an AutoDL Linux instance; a fresh install using that requirements file has not yet been verified. `--check` does not create a CUDA session, so run a short GPU sample first.
 
 For English, add `--language en`; for a configured CUDA environment, select `--tts-backend moss_onnx --tts-device cuda`. See [TTS backends and voice registration](scripts/sound/TTS.md) for setup, fixed assistant voices and optional reference voices.
 
@@ -162,7 +168,7 @@ print(timeline[0]["speaker"], timeline[0]["start_sec"], timeline[0]["end_sec"])
 
 ## Data, limitations and attribution
 
-The data consists of synthetic Chinese and English dialogue. Generation checks script structure, timing, truncation and audio format. The CLI currently runs without ASR. The dataset card lists available recordings, audio demos and sources. [Hugging Face dataset](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex)
+The data consists of synthetic Chinese and English dialogue. Generation checks script structure, timing, truncation and audio format. Rule checks and prompt guidance do not verify every factual claim or guarantee natural dialogue. The CLI currently runs without ASR. The dataset card lists available recordings, audio demos and sources. [Hugging Face dataset](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex)
 
 VOiCES is from SRI International / Lab41, In-Q-Tel, under CC BY 4.0. Preserve attribution when redistributing audio mixes. For human voice references, use appropriately licensed clips and keep their source and licence in the manifest. [VOiCES corpus](https://registry.opendata.aws/lab41-voices/)
 

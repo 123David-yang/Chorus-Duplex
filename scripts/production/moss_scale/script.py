@@ -10,7 +10,7 @@ from scripts.text.oneshot_agent.lexicon import load_bank
 from scripts.text.quality import unsupported_assistant_action
 from scripts.text.simultaneous_choices import (
     CHOICE_CONFIRMATIONS, CHOICE_RESOLUTIONS, CONFLICTING_CHOICES, CONFLICT_CLARIFICATIONS,
-    choice_option_sets, choice_request_text, choice_setup_text,
+    choice_option_sets, choice_request_texts, choice_setup_texts,
 )
 from scripts.text.utils.llm import chat
 from scripts.text.voices import gender_of, reference_voices, voice_bindings_snapshot, voices_for_dialogue
@@ -298,13 +298,13 @@ def validate(
             choices = setup.get("choice_options")
             permitted_choices = [list(pair) for pair in choice_option_sets(language, d["topic"])]
             if (setup.get("interaction") != "choice_setup" or choices not in permitted_choices
-                or setup["text"] != choice_setup_text(language, choices)):
+                or setup["text"] not in choice_setup_texts(language, choices)):
                 raise ValueError("同时请求前的助手须明确提出该话题的两个具体选项")
             request = turns[other-2] if other >= 2 else {}
             if (request.get("interaction") != "choice_request" or request.get("speaker") not in users
                 or request.get("addressee") not in ("assistant", ["assistant"])
                 or request.get("choice_options") != choices
-                or request.get("text") != choice_request_text(language, choices)
+                or request.get("text") not in choice_request_texts(language, choices)
                 or setup["responds_to"] != [other-2]):
                 raise ValueError("助手提出选项之前须先回应用户的选项请求")
             indices = (first.get("choice_index"), t.get("choice_index"))

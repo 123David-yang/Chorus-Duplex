@@ -42,7 +42,7 @@ TRANSITION_PIVOTS = tuple(sorted(
 EN_TRANSITION_PIVOTS = ("But", "Wait", "Hold on", "Hang on", "Actually", "One second", "Let me jump in")
 from scripts.text.simultaneous_choices import (
     CHOICE_CONFIRMATIONS, CHOICE_RESOLUTIONS, CONFLICTING_CHOICES, CONFLICT_CLARIFICATIONS,
-    choice_option_sets, choice_request_text, choice_setup_text,
+    choice_option_sets, choice_request_texts, choice_setup_texts,
 )
 
 
@@ -123,11 +123,11 @@ def plan_slots(users, events, group, repeat, group_interrupt, transition, handof
             request = add(first, "assistant", refs=[len(slots)-1],
                           cue="请助手帮助两人分析前文讨论过的选择。")
             slots[request].update(interaction="choice_request", choice_options=options,
-                                  fixed_text=choice_request_text(language, options))
+                                  fixed_text=rng.choice(choice_request_texts(language, options)))
             setup = add("assistant", "all", refs=[request],
                         cue="基于当前主话题明确提出两个互斥的具体方案，请大家选一个。")
             slots[setup].update(interaction="choice_setup", choice_options=options,
-                                fixed_text=choice_setup_text(language, options))
+                                fixed_text=rng.choice(choice_setup_texts(language, options)))
             first_text, second_text = rng.choice(CONFLICTING_CHOICES[language])
             choices = [(first_text, 0), (second_text, 1)]
             if rng.random() < .5:
@@ -197,6 +197,7 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
         "带 fixed_text 的轮次必须逐字使用给定台词，不能改变这些选项。"
         "不要读角色编号。关系设定只适用于人类角色，助手是语音助手。向助手说话时不要使用亲属称呼。"
         "助手只提供建议，不声称亲历、在场、已查询实时信息、替用户操作或发群消息。保持同一话题，对已经说出的信息作回应。"
+        "事实性建议应符合已知条件；不确定时说明条件或保持审慎，避免保证收益、安全或其他无法确认的结果。"
         "示例：{\"0\":\"明天几点出发？\",\"1\":[\"第一班车七点开\",\"我们最好提前二十分钟到站。\"]}。"
     )
     if language == "en":
@@ -205,6 +206,7 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
             "The Chinese cues describe the scene and timing only. Use English punctuation. "
             "The assistant gives suggestions only: never say it will buy, book, call, send messages, "
             "or create and share documents. It may ask a person to do those things. "
+            "Make factual advice conditional on what is known; avoid unsupported guarantees. "
             "Keep acknowledgements to one to six words. A transition starts with a short "
             "acknowledgement and puts the requested English pivot only in the second part. "
             "For a hesitation, make the first clause sound plausible if the listener stops hearing it midway. "
@@ -226,7 +228,7 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
             request["全局场景线索"] = (
                 "整段主对话应围绕下面两个具体方案和用户的实际需求展开，"
                 "即使当前分块还未出现这句，也请提前自然引入相关主题："
-                + choice_request_text(language, setup["choice_options"])
+                + choice_request_texts(language, setup["choice_options"])[0]
             )
             request["角色私有倾向"] = {
                 s["speaker"]: setup["choice_options"][s["choice_index"]]

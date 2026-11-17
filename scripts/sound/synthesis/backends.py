@@ -63,9 +63,8 @@ class MossOnnxBackend:
         elif device != "cpu":
             raise ValueError("MOSS ONNX device must be cpu or cuda:0")
         from onnx_tts_runtime import OnnxTtsRuntime
-        portable=Path(r"D:\DuplexVoice_resources\models\moss-tts-nano-onnx")
-        if os.environ.get("MOSS_MODEL_DIR"):opts["model_dir"]=os.environ["MOSS_MODEL_DIR"]
-        elif portable.is_dir():opts["model_dir"]=str(portable)
+        from scripts.production.moss_scale.config import moss_model_root
+        opts["model_dir"] = str(moss_model_root(Path(os.environ.get("MOSS_DIR", str(MOSS_DIR)))))
         class PortableOnnxRuntime(OnnxTtsRuntime):
             def _load_reference_audio(self, reference_audio_path):
                 # Local upstream fork still had tensor-only calls on a numpy waveform.
@@ -173,7 +172,8 @@ class KokoroBackend:
     capabilities={"cpu":True,"voice_cloning":False,"native_sample_rate":24000}
     def __init__(self,tmp:Path):
         import sherpa_onnx
-        folder=Path(os.environ.get("KOKORO_MODEL_DIR",r"D:\DuplexVoice_resources\models\kokoro-multi-lang-v1_1"))
+        from scripts.production.moss_scale.config import kokoro_model_root
+        folder=kokoro_model_root()
         self.model_dir=folder
         model_name="model.onnx" if (folder/"model.onnx").is_file() else "model.int8.onnx"
         required=[model_name,"voices.bin","tokens.txt","lexicon-us-en.txt","lexicon-zh.txt"]
