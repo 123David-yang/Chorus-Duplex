@@ -97,8 +97,8 @@ def check_inputs():
                 if not torch.cuda.is_available():
                     errors.append("Qwen CUDA was requested but CUDA is unavailable.")
                 else:
-                    index = int(device.split(":", 1)[1]) if ":" in device else 0
-                    if index >= torch.cuda.device_count():
+                    index = int(device.split(":", 1)[1]) if ":" in device else torch.cuda.current_device()
+                    if index < 0 or index >= torch.cuda.device_count():
                         errors.append("Requested Qwen CUDA device index is unavailable.")
             except ImportError:
                 pass

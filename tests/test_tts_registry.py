@@ -167,6 +167,39 @@ class VoiceRegistryTests(unittest.TestCase):
 
 
 class BackendTests(unittest.TestCase):
+    def test_qwen_unindexed_cuda_uses_current_device_for_precision_and_loading(self):
+        calls = []
+        class Factory:
+            @staticmethod
+            def from_pretrained(name, **kwargs):
+                calls.append(kwargs)
+                return object()
+        cuda = types.SimpleNamespace(is_available=lambda: True, device_count=lambda: 2,
+                                     current_device=lambda: 1,
+                                     get_device_capability=lambda index: (8, 0) if index == 0 else (7, 5))
+        torch = types.SimpleNamespace(float32="float32", bfloat16="bfloat16", cuda=cuda)
+        with patch.dict(sys.modules, {"torch": torch, "qwen_tts": types.SimpleNamespace(Qwen3TTSModel=Factory)}), \
+             patch.dict(os.environ, {"TTS_DEVICE": "cuda"}, clear=True):
+            backend = backends.QwenBackend(None)
+            backend._model("preset")
+        self.assertEqual(backend.device, "cuda:1")
+        self.assertEqual(calls[0]["device_map"], "cuda:1")
+        self.assertEqual(calls[0]["dtype"], "float32")
+
+    def test_qwen_precision_uses_bfloat16_on_ampere_and_float32_on_older_cuda(self):
+        class Factory:
+            @staticmethod
+            def from_pretrained(name, **kwargs):
+                return kwargs["dtype"]
+        for major, expected in ((8, "bfloat16"), (7, "float32")):
+            cuda = types.SimpleNamespace(is_available=lambda: True, device_count=lambda: 1,
+                                         get_device_capability=lambda index: (major, 0))
+            torch = types.SimpleNamespace(float32="float32", bfloat16="bfloat16", cuda=cuda)
+            with self.subTest(major=major), patch.dict(sys.modules, {"torch": torch, "qwen_tts": types.SimpleNamespace(Qwen3TTSModel=Factory)}), \
+                 patch.dict(os.environ, {"TTS_DEVICE": "cuda:0"}, clear=True):
+                backend = backends.QwenBackend(None)
+                self.assertEqual(backend._model("preset"), expected)
+
     def test_qwen_prepare_rejects_wrong_checkpoint_or_voice_before_drafting(self):
         backend = object.__new__(backends.QwenBackend)
         def model(kind, speakers=("Ryan", "Vivian"), languages=("English", "Chinese")):

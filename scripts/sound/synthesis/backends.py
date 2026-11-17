@@ -119,9 +119,15 @@ class QwenBackend:
         if self.device.startswith("cuda") and not torch.cuda.is_available():
             raise RuntimeError("Qwen CUDA was requested but CUDA is unavailable")
         if self.device.startswith("cuda"):
-            index = int(self.device.split(":", 1)[1]) if ":" in self.device else 0
-            if index >= torch.cuda.device_count():
+            index = int(self.device.split(":", 1)[1]) if ":" in self.device else torch.cuda.current_device()
+            if index < 0 or index >= torch.cuda.device_count():
                 raise ValueError("Requested Qwen CUDA device index is unavailable")
+            self.device = f"cuda:{index}"
+        # Qwen's official examples use bfloat16; float16 can overflow during
+        # sampling. Use float32 on CPUs and pre-Ampere CUDA devices.
+        self.dtype = torch.float32
+        if self.device.startswith("cuda") and torch.cuda.get_device_capability(index)[0] >= 8:
+            self.dtype = torch.bfloat16
         self.torch=torch
         self.factory=Qwen3TTSModel
         self.models={}
@@ -164,7 +170,7 @@ class QwenBackend:
                     warnings.simplefilter("ignore")
                     self.models[kind]=self.factory.from_pretrained(
                         name, device_map=self.device,
-                        dtype=self.torch.float32 if self.device=="cpu" else self.torch.float16,
+                        dtype=self.dtype,
                         attn_implementation="eager", cache_dir=str(self.cache_dir))
             except Exception as exc:
                 status = getattr(getattr(exc, "response", None), "status_code", None)
@@ -213,7 +219,7 @@ class QwenBackend:
         return AudioResult(samples,rate,truncated,
                            provenance={"engine":"qwen3","voice":voice,
                                        "voice_cloning":bool(reference_audio),
-                                       "language":language,"device":self.device,
+                                       "language":language,"device":self.device,"dtype":str(self.dtype).split(".")[-1],
                                        "codec_frames_per_second":fps,"max_new_tokens":max_tokens,
                                        "truncation_detection":"duration_near_token_limit"})
 

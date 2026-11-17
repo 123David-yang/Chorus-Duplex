@@ -102,7 +102,7 @@ def plan_slots(users, events, group, repeat, group_interrupt, transition, handof
                 start = add(listener, "third_party_01", cue="突然有门外或身边的第三方，转向对方说一句具体的事。")
                 aside = add("third_party_01", listener, "side_talk", [start], "第三方回一句，本轮独立于主话题。")
             add(listener, "third_party_01", refs=[aside], cue="短暂回应第三方。")
-            resume = add(listener, "assistant", refs=[opening], cue="自然接回插话前尚未处理的具体细节，不要完整重复开场问题或机械说‘回到刚才’。")
+            resume = add(listener, "assistant", refs=[opening], cue="直接延续插话前尚未解决的具体细节，不必宣布‘回到刚才’或复述开场问题；提到别人的限制时说清是谁。")
             add("assistant", listener, refs=[resume], cue="继续主线。")
         elif event == "incomplete":
             fillers = ("uh", "um", "let me think", "give me a second") if language == "en" else HESITATION_FILLERS
@@ -228,7 +228,7 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
         "不要凭色温判断亮度或阅读效果，不要预设房屋接线改动容易；不要把某种食物当作缓解症状的通用办法，宠物健康建议应以兽医要求和具体情况为准。"
         "设备型号和说明书未知时，不得编造具体的容量、尺寸、转速或安全阈值。"
         "食品、过敏与健康建议要承接已知限制；缺少食材、设备或数量信息时，不要编造具体烹饪时长、批次或熟透保证。"
-        "区分无添加糖和总糖、碳水；各人的限制不能换到别人身上。设备兼容先确认接口，别默认一定能用。"
+        "区分无添加糖和总糖、碳水；记住每项限制是谁说的，转述别人时指明对方，不要改成‘我’；自己的新情况可以自然补充。设备兼容先确认接口，别默认一定能用。"
         "卖家政策、退货期限和保修条件未知时，请先核实，不能猜具体天数；检查刀具或设备时不要建议直接用手接触刀刃。"
         "已明确出现电器接触不良需用手按住、自动断电失灵或冒烟等故障时，先建议停止使用、安全可行时断电并请专业人员检查，不要继续试验。"
         "后续话轮推进尚未解决的事情，不要反复重新确定已明确的日期或安排。打断必须增加新的限制或纠正，而不是重复助手刚说过的内容。"
@@ -257,7 +257,8 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
             "acknowledgement and puts the requested English pivot only in the second part. "
             "For a hesitation, make the first clause sound plausible if the listener stops hearing it midway. "
             "Include an unfinished thought before the filler; a filler alone is not an incomplete sentence. "
-            "Keep each person's restrictions attached to that person; distinguish added sugar from total sugar or carbohydrates, "
+            "Attribute each stated restriction to its speaker: refer to the other person when recalling theirs, "
+            "while allowing people to introduce their own new constraints. Distinguish added sugar from total sugar or carbohydrates, "
             "and check device connectors before assuming compatibility. Don't call toasting no preparation. "
             "If the assistant promises an explanation, follow through instead of repeating the plan. "
             "Separate the requested filler from that clause with a comma, ellipsis, or em dash, "
@@ -298,7 +299,13 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
         if seeds:
             request["短附和措辞参考"] = seeds
         if authored:
-            request["前半段已说过的台词"] = authored
+            # Keep the speaker with each earlier line: text alone loses ownership
+            # of preferences, restrictions and commitments across draft calls.
+            request["前半段已说过的台词"] = {
+                key: {"speaker": slots[int(key)]["speaker"],
+                      "kind": slots[int(key)]["kind"], "text": wording}
+                for key, wording in authored.items()
+            }
         raw = chat(instruction, json.dumps(request, ensure_ascii=False, separators=(",", ":")),
                    max_tokens=4500, temperature=.75, json_output=True)
         result = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
