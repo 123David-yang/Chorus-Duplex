@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import numpy as np
+import soundfile as sf
 
 from scripts.sound.synthesis import backends
 from scripts.text import voices
@@ -21,7 +22,7 @@ class VoiceRegistryTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.reference = self.root / "voice.wav"
-        self.reference.write_bytes(b"sample reference audio")
+        sf.write(self.reference, np.zeros(4800, dtype=np.float32), 24000)
         self.digest = hashlib.sha256(self.reference.read_bytes()).hexdigest()
         self.registry = self.root / "voices.json"
         self.registry.write_text(json.dumps({
@@ -76,6 +77,15 @@ class VoiceRegistryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "checksum mismatch"):
                 voices.reference_for_voice("speaker_two")
 
+    def test_invalid_reference_audio_is_rejected_before_synthesis(self):
+        data = json.loads(self.registry.read_text(encoding="utf-8"))
+        data["backends"]["moss_onnx"]["voices"][2].pop("sha256")
+        self.registry.write_text(json.dumps(data), encoding="utf-8")
+        self.reference.write_bytes(b"not a valid audio file")
+        with patch.dict(os.environ, {"VOICE_REGISTRY": str(self.registry), "TTS_BACKEND": "moss_onnx"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "cannot be fully decoded"):
+                voices.voice_registry()
+
     def test_unselected_backend_does_not_require_its_reference(self):
         data = json.loads(self.registry.read_text(encoding="utf-8"))
         data["backends"]["qwen3"] = {
@@ -113,6 +123,20 @@ class VoiceRegistryTests(unittest.TestCase):
             self.assertEqual(voices.reference_voices()["legacy"]["source_url"], "https://example.org/file")
             self.assertEqual(voices.preset_for_voice("Zhiming"), "Zhiming")
 
+    def test_legacy_reference_named_with_kokoro_prefix_is_not_lost_for_other_backends(self):
+        manifest = self.root / "legacy.json"
+        manifest.write_text(json.dumps({"schema_version": 1, "voices": [{
+            "id": "kokoro_reference", "reference_audio": "voice.wav", "sha256": self.digest,
+            "license": "CC BY 4.0", "source_url": "https://example.org/file", "gender": "女声",
+        }]}), encoding="utf-8")
+        for backend in ("moss_onnx", "qwen3"):
+            with self.subTest(backend=backend), patch.dict(os.environ, {"VOICE_MANIFEST": str(manifest), "TTS_BACKEND": backend}, clear=True):
+                self.assertEqual(Path(voices.reference_for_voice("kokoro_reference")), self.reference)
+                self.assertEqual(voices.gender_of("kokoro_reference"), "女声")
+        with patch.dict(os.environ, {"TTS_BACKEND": "kokoro"}, clear=True):
+            self.assertIsNone(voices.reference_for_voice("kokoro_003"))
+            self.assertEqual(voices.gender_of("kokoro_003"), "女声")
+
     def test_registry_does_not_allow_cloned_assistant(self):
         data = json.loads(self.registry.read_text(encoding="utf-8"))
         data["backends"]["moss_onnx"]["assistant"] = "speaker_two"
@@ -143,6 +167,116 @@ class VoiceRegistryTests(unittest.TestCase):
 
 
 class BackendTests(unittest.TestCase):
+    def test_qwen_prepare_rejects_wrong_checkpoint_or_voice_before_drafting(self):
+        backend = object.__new__(backends.QwenBackend)
+        def model(kind, speakers=("Ryan", "Vivian"), languages=("English", "Chinese")):
+            return types.SimpleNamespace(model=types.SimpleNamespace(tts_model_type=kind),
+                                         get_supported_speakers=lambda: speakers,
+                                         get_supported_languages=lambda: languages)
+        registry = {"voices": {"assistant": {"kind": "preset", "speaker": "Ryan"},
+                               "user": {"kind": "preset", "speaker": "Vivian"}}}
+        with patch.dict(os.environ, {"MOSS_TEXT_LANGUAGE": "en"}, clear=True), \
+             patch("scripts.text.voices.voice_registry", return_value=registry):
+            with patch.object(backend, "_model", return_value=model("base")):
+                with self.assertRaisesRegex(ValueError, "CustomVoice"):
+                    backend.prepare()
+            with patch.object(backend, "_model", return_value=model("custom_voice", speakers=("Ryan",))):
+                with self.assertRaisesRegex(ValueError, "configured speakers"):
+                    backend.prepare()
+            with patch.object(backend, "_model", side_effect=[model("custom_voice"), model("custom_voice")]):
+                with self.assertRaisesRegex(ValueError, "Base"):
+                    backend.prepare(include_references=True)
+            with patch.object(backend, "_model", side_effect=[model("custom_voice"), model("base")]):
+                backend.prepare(include_references=True)
+
+    def test_legacy_voice_manifest_is_automatically_selected_only_for_moss(self):
+        from scripts.production.moss_scale import runner
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            manifest = root / "voices" / "AISHELL-3" / "manifest.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("{}", encoding="utf-8")
+            for backend, expected in (("moss_onnx", str(manifest)), ("qwen3", None), ("kokoro", None)):
+                seen = []
+                with self.subTest(backend=backend), patch.dict(os.environ, {}, clear=True), \
+                     patch.object(runner, "load_env"), \
+                     patch("scripts.production.moss_scale.config.resources_root", return_value=root), \
+                     patch.object(runner, "check_inputs", side_effect=lambda: seen.append(os.environ.get("VOICE_MANIFEST")) or []), \
+                     patch.object(sys, "stdout", new_callable=io.StringIO), \
+                     patch.object(sys, "argv", ["scale_moss", "--check", "--tts-backend", backend]):
+                    runner.main()
+                self.assertEqual(seen, [expected])
+
+    def test_qwen_model_load_errors_do_not_echo_remote_secrets(self):
+        class Factory:
+            @staticmethod
+            def from_pretrained(name, **kwargs):
+                raise RuntimeError("signed-download-token=private-sentinel")
+        torch = types.SimpleNamespace(float32="float32", float16="float16")
+        qwen = types.SimpleNamespace(Qwen3TTSModel=Factory)
+        with patch.dict(sys.modules, {"torch": torch, "qwen_tts": qwen}), \
+             patch.dict(os.environ, {"TTS_DEVICE": "cpu"}, clear=True):
+            backend = backends.QwenBackend(None)
+            with self.assertRaises(RuntimeError) as exc:
+                backend.prepare()
+        self.assertIn("Qwen model initialization failed", str(exc.exception))
+        self.assertNotIn("private-sentinel", str(exc.exception))
+
+    def test_qwen_cache_defaults_to_resources_without_relocating_credentials(self):
+        torch = types.SimpleNamespace(float32="float32", float16="float16")
+        qwen = types.SimpleNamespace(Qwen3TTSModel=object())
+        with TemporaryDirectory() as folder, patch.dict(sys.modules, {"torch": torch, "qwen_tts": qwen}), \
+             patch.dict(os.environ, {"TTS_DEVICE": "cpu", "DUPLEX_RESOURCES_DIR": folder}, clear=True):
+            backend = backends.QwenBackend(None)
+            self.assertEqual(backend.cache_dir, Path(folder) / "hf_cache" / "hub")
+            self.assertEqual(os.environ["HF_HUB_CACHE"], str(Path(folder) / "hf_cache" / "hub"))
+            self.assertEqual(os.environ["HF_XET_CACHE"], str(Path(folder) / "hf_cache" / "xet"))
+            self.assertNotIn("HF_HOME", os.environ)
+
+    def test_continuous_run_stops_after_repeated_failures(self):
+        from scripts.production.moss_scale import runner
+        with TemporaryDirectory() as folder, patch.dict(os.environ, {}, clear=True), \
+             patch.object(runner, "load_env"), patch.object(runner, "check_inputs", return_value=[]), \
+             patch.object(runner, "FastSynth"), patch.object(runner, "recover_deliveries"), \
+             patch.object(runner, "DeliveryIndex") as index, \
+             patch.object(runner, "generate", side_effect=ValueError("synthetic failure")) as generate, \
+             patch.object(sys, "stdout", new_callable=io.StringIO), \
+             patch.object(sys, "argv", ["scale_moss", "--root", folder, "--continuous"]):
+            index.return_value.hours = 0
+            with self.assertRaisesRegex(RuntimeError, "连续12个候选出错"):
+                runner.main()
+            rows = (Path(folder) / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(rows), 12)
+            self.assertLessEqual(generate.call_count, 13)
+
+    def test_qwen_preflight_rejects_unavailable_cuda_index(self):
+        from scripts.production.moss_scale import runner
+        cuda = types.SimpleNamespace(is_available=lambda: True, device_count=lambda: 1)
+        torch = types.SimpleNamespace(cuda=cuda)
+        with patch.dict(os.environ, {"TTS_BACKEND": "qwen3", "TTS_DEVICE": "cuda:999", "LLM_API_KEY": "fake"}, clear=True), \
+             patch.dict(sys.modules, {"torch": torch}), \
+             patch.object(runner.importlib.util, "find_spec", return_value=object()), \
+             patch.object(runner, "resolve_vad_model") as vad, \
+             patch.object(runner, "background_rooms"), \
+             patch("scripts.text.voices.reference_voices", return_value={}), \
+             patch("scripts.text.voices.voices_for_dialogue", return_value={}):
+            vad.return_value.is_file.return_value = True
+            self.assertIn("Requested Qwen CUDA device index is unavailable.", runner.check_inputs())
+
+    def test_qwen_model_load_failure_happens_before_any_script_request(self):
+        from scripts.production.moss_scale import runner
+        with TemporaryDirectory() as folder, patch.dict(os.environ, {}, clear=True), \
+             patch.object(runner, "load_env"), patch.object(runner, "check_inputs", return_value=[]), \
+             patch.object(runner, "recover_deliveries"), patch.object(runner, "DeliveryIndex") as index, \
+             patch.object(runner, "FastSynth") as synth, patch.object(runner, "generate") as generate, \
+             patch("scripts.text.voices.reference_voices", return_value={}), \
+             patch.object(sys, "argv", ["scale_moss", "--root", folder, "--hours", ".01", "--tts-backend", "qwen3"]):
+            index.return_value.hours = 0
+            synth.return_value.backend.prepare.side_effect = RuntimeError("synthetic load failure")
+            with self.assertRaisesRegex(RuntimeError, "synthetic load failure"):
+                runner.main()
+            generate.assert_not_called()
+
     def test_failed_backend_exception_is_not_written_to_event_logs(self):
         from scripts.production.moss_scale import runner
         with TemporaryDirectory() as folder, patch.dict(os.environ, {}, clear=True), \
@@ -367,6 +501,7 @@ class BackendTests(unittest.TestCase):
 
     def test_qwen_english_presets_and_reference_use_separate_models(self):
         calls = []
+        load_options = []
         class Model:
             def __init__(self, name):
                 self.name = name
@@ -385,19 +520,22 @@ class BackendTests(unittest.TestCase):
             @staticmethod
             def from_pretrained(name, **kwargs):
                 calls.append(("load", name))
+                load_options.append(kwargs)
                 return Model(name)
         torch = types.SimpleNamespace(float32="float32", float16="float16")
         qwen = types.SimpleNamespace(Qwen3TTSModel=Factory)
         with TemporaryDirectory() as folder, patch.dict(sys.modules, {"torch": torch, "qwen_tts": qwen}):
             reference = Path(folder) / "voice.wav"
             reference.write_bytes(b"audio")
-            with patch.dict(os.environ, {"TTS_DEVICE": "cpu", "MOSS_TEXT_LANGUAGE": "en"}, clear=True):
+            with patch.dict(os.environ, {"TTS_DEVICE": "cpu", "MOSS_TEXT_LANGUAGE": "en",
+                                         "HF_HUB_CACHE": str(Path(folder)/"hub"), "HF_XET_CACHE": str(Path(folder)/"xet")}, clear=True):
                 backend = backends.QwenBackend(Path(folder))
                 backend.synthesize("hello", "Ryan", None, 4)
                 backend.synthesize("hello", "guest", str(reference), 4)
                 backend.synthesize("again", "guest", str(reference), 4)
         self.assertEqual([entry[0] for entry in calls].count("load"), 2)
         self.assertEqual([entry[0] for entry in calls].count("prompt"), 1)
+        self.assertTrue(all(option["cache_dir"] == str(Path(folder)/"hub") for option in load_options))
         self.assertEqual(next(kwargs["language"] for name, kwargs in calls if name == "preset"), "English")
         self.assertEqual(next(kwargs["language"] for name, kwargs in calls if name == "clone"), "English")
         self.assertTrue(all(kwargs["max_new_tokens"] == 50 for name, kwargs in calls if name in ("preset", "clone")))
@@ -417,7 +555,10 @@ class BackendTests(unittest.TestCase):
         qwen = types.SimpleNamespace(Qwen3TTSModel=Factory)
         with patch.dict(sys.modules, {"torch": torch, "qwen_tts": qwen}), \
              patch.dict(os.environ, {"TTS_DEVICE": "cpu"}, clear=True):
-            result = backends.QwenBackend(None).synthesize("hello", "Ryan", None, 4)
+            backend = backends.QwenBackend(None)
+            result = backend.synthesize("hello", "Ryan", None, 4)
+            with self.assertRaisesRegex(ValueError, "more than two codec frames"):
+                backend.synthesize("hello", "Ryan", None, .16)
         self.assertTrue(result.truncated)
         self.assertEqual(result.provenance["max_new_tokens"], 50)
 

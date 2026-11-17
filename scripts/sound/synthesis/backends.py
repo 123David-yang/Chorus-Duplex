@@ -6,10 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 import importlib
+import logging
 import math
 import os
 import re
 import sys
+import warnings
 import numpy as np
 
 @dataclass
@@ -102,6 +104,13 @@ class QwenBackend:
     """Qwen preset and clone models, loaded lazily when a voice needs each model."""
     capabilities={"cpu":True,"gpu":True,"voice_cloning":True,"reference_text_required":False}
     def __init__(self,tmp:Path):
+        from scripts.production.moss_scale.config import resources_root
+        cache_base = Path(os.environ["HF_HOME"]).expanduser() if os.environ.get("HF_HOME") else resources_root() / "hf_cache"
+        self.cache_dir = Path(os.environ.get("HF_HUB_CACHE", str(cache_base / "hub"))).expanduser()
+        # Hub/Xet read these at import time; this changes only the current process.
+        os.environ.setdefault("HF_HUB_CACHE", str(self.cache_dir))
+        os.environ.setdefault("HF_XET_CACHE", str(cache_base / "xet"))
+        os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
         import torch
         from qwen_tts import Qwen3TTSModel
         self.device=os.environ.get("TTS_DEVICE","cpu").lower()
@@ -109,10 +118,38 @@ class QwenBackend:
             raise ValueError("Qwen device must be cpu or cuda[:index]")
         if self.device.startswith("cuda") and not torch.cuda.is_available():
             raise RuntimeError("Qwen CUDA was requested but CUDA is unavailable")
+        if self.device.startswith("cuda"):
+            index = int(self.device.split(":", 1)[1]) if ":" in self.device else 0
+            if index >= torch.cuda.device_count():
+                raise ValueError("Requested Qwen CUDA device index is unavailable")
         self.torch=torch
         self.factory=Qwen3TTSModel
         self.models={}
         self.prompts={}
+
+    def prepare(self, include_references=False):
+        """Load required model variants before spending tokens on new scripts."""
+        from scripts.text.voices import _QWEN_GENDER, voice_registry
+        preset = self._model("preset")
+        if getattr(getattr(preset, "model", None), "tts_model_type", None) != "custom_voice":
+            raise ValueError("Qwen preset model must be a CustomVoice checkpoint")
+        registry = voice_registry()
+        voices = ({row["speaker"] for row in registry["voices"].values() if row["kind"] == "preset"}
+                  if registry else set(_QWEN_GENDER))
+        supported = preset.get_supported_speakers()
+        if not supported or not {voice.casefold() for voice in voices} <= {str(value).casefold() for value in supported}:
+            raise ValueError("Qwen preset model cannot validate all configured speakers")
+        languages = preset.get_supported_languages()
+        required = {"zh": "chinese", "en": "english"}.get(os.environ.get("MOSS_TEXT_LANGUAGE", "zh"))
+        if not required or not languages or required not in {str(value).casefold() for value in languages}:
+            raise ValueError("Qwen preset model does not support the requested language")
+        if include_references:
+            clone = self._model("clone")
+            if getattr(getattr(clone, "model", None), "tts_model_type", None) != "base":
+                raise ValueError("Qwen reference model must be a Base checkpoint")
+            languages = clone.get_supported_languages()
+            if not languages or required not in {str(value).casefold() for value in languages}:
+                raise ValueError("Qwen reference model does not support the requested language")
 
     def _model(self, kind):
         if kind not in self.models:
@@ -120,10 +157,21 @@ class QwenBackend:
                 name=os.environ.get("TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-Base")
             else:
                 name=os.environ.get("QWEN_PRESET_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice")
-            self.models[kind]=self.factory.from_pretrained(
-                name, device_map=self.device,
-                dtype=self.torch.float32 if self.device=="cpu" else self.torch.float16,
-                attn_implementation="eager")
+            previous = logging.root.manager.disable
+            logging.disable(logging.CRITICAL)
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    self.models[kind]=self.factory.from_pretrained(
+                        name, device_map=self.device,
+                        dtype=self.torch.float32 if self.device=="cpu" else self.torch.float16,
+                        attn_implementation="eager", cache_dir=str(self.cache_dir))
+            except Exception as exc:
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                suffix = f", HTTP {status}" if isinstance(status, int) else ""
+                raise RuntimeError(f"Qwen model initialization failed ({type(exc).__name__}{suffix})") from None
+            finally:
+                logging.disable(previous)
         return self.models[kind]
 
     def synthesize(self,text,voice,reference_audio,max_seconds):
@@ -142,6 +190,8 @@ class QwenBackend:
         if not math.isfinite(fps) or fps <= 0:
             raise ValueError("Qwen codec frame rate must be positive and finite")
         max_tokens=max(1, math.ceil(max_seconds * fps))
+        if max_tokens <= 2:
+            raise ValueError("Qwen generation budget must allow more than two codec frames")
         if reference_audio:
             path=Path(reference_audio).resolve()
             key=(str(path), path.stat().st_mtime_ns, path.stat().st_size)

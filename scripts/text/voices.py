@@ -27,6 +27,30 @@ _QWEN_GENDER = {"Ryan": "男声", "Aiden": "男声", "Uncle_Fu": "男声",
                 "Serena": "女声", "Ono_Anna": "女声", "Sohee": "女声"}
 
 
+@lru_cache(maxsize=256)
+def _check_reference_audio(path: str, size: int, modified_ns: int) -> None:
+    """Validate the complete reference once per observed file version."""
+    import numpy as np
+    import soundfile as sf
+    try:
+        with sf.SoundFile(path) as audio:
+            if audio.samplerate <= 0 or audio.channels <= 0 or audio.frames <= 0:
+                raise ValueError("Invalid reference audio format")
+            expected = audio.frames
+            frames = 0
+            while frames < expected:
+                block = audio.read(min(65536, expected - frames), dtype="float32", always_2d=True)
+                if not len(block):
+                    break
+                if not np.all(np.isfinite(block)):
+                    raise ValueError("Invalid reference samples")
+                frames += len(block)
+            if frames != expected:
+                raise ValueError("Incomplete reference audio")
+    except (OSError, RuntimeError, ValueError):
+        raise ValueError("Reference audio cannot be fully decoded") from None
+
+
 def _validate_reference(row: dict) -> None:
     path = Path(row["reference_audio"])
     if not path.is_file():
@@ -37,6 +61,8 @@ def _validate_reference(row: dict) -> None:
             actual = hashlib.file_digest(stream, "sha256").hexdigest()
         if actual.lower() != expected.lower():
             raise ValueError(f"Reference audio checksum mismatch for {row['id']}")
+    stat = path.stat()
+    _check_reference_audio(str(path.resolve()), stat.st_size, stat.st_mtime_ns)
 
 
 def _public_source_url(value: str | None) -> str | None:
@@ -192,7 +218,7 @@ def gender_of(voice: str) -> str:
     registry = voice_registry()
     if registry is not None:
         return registry["voices"].get(voice, {}).get("gender", "未知")
-    if voice.startswith("kokoro_"):
+    if os.environ.get("TTS_BACKEND") == "kokoro" and voice.startswith("kokoro_"):
         sid=int(voice.split("_",1)[1])
         return "女声" if 3<=sid<=57 else "男声" if 58<=sid<=102 else "未知"
     return reference_voices().get(voice, {}).get("gender", _GENDER.get(voice, _QWEN_GENDER.get(voice, "未知")))
@@ -239,7 +265,8 @@ def reference_for_voice(voice: str) -> str | None:
             _validate_reference(row)
             return row["reference_audio"]
         return None
-    if voice.startswith("kokoro_"):return None
+    if os.environ.get("TTS_BACKEND") == "kokoro" and voice.startswith("kokoro_"):
+        return None
     row=reference_voices().get(voice)
     if row:
         _validate_reference(row)

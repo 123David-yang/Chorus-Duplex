@@ -49,7 +49,19 @@ CUDA 需要包含 CUDAExecutionProvider 的 ONNX Runtime 和兼容的 CUDA/cuDNN
 
 `module:factory` 和 `MOSS_DIR` 会从指定位置加载并执行 Python 代码，使用可信的代码来源。
 
+启动时会完整解码当前音色清单中的所有参考音频，格式需受 Python SoundFile 支持；清单中任何损坏条目都会阻止启动，大型清单的首次检查可能较慢。这只验证文件可解码，不代表音频非静音或克隆效果合格。
+
 Qwen 的预设音色使用 CustomVoice 模型，参考音色使用 Base 模型。两种模型按需要分别加载，混合使用会占用两份模型内存。默认助手音色为 Qwen 预设 `Ryan`。可通过 `QWEN_PRESET_MODEL` 和 `TTS_MODEL` 指定各自模型路径或模型 ID。Kokoro 不支持参考音色克隆。
+
+Qwen 适配器目前只有模拟测试，尚未完成真实权重的端到端验证。请在独立虚拟环境中按 [Qwen 官方安装说明](https://github.com/QwenLM/Qwen3-TTS)配置与设备匹配的 PyTorch、torchaudio 和 `qwen-tts`，不要在同一环境混装本项目的 MOSS CPU/GPU 依赖清单。官方 Qwen 包目前依赖 CPU 版 ONNX Runtime 且要求旧于 1.0 的 Hugging Face Hub，而 MOSS GPU 清单使用 GPU 版 ONNX Runtime 和 Hub 1.7.1；组合前应确认具体版本兼容。实际生产会在调用剧本服务前加载所需的 Qwen 模型，缺少权重时上游可能下载；`--check` 不会加载或下载模型。
+
+`scale_moss --tts-backend qwen3` 可选择 Qwen 适配器；`produce_and_upload` 目前固定使用 MOSS，尚未支持 Qwen 自动生产并上传。
+
+Qwen 的模型 revision 与本地权重内容目前没有绑定到续跑目录；请自行固定并记录模型版本，模型或权重变化时使用新目录。相同的预设音色名称并不能证明不同版本的实际声音相同。
+
+为避免配置错误时持续消耗剧本服务额度，生产入口在首次生成剧本前加载 Qwen 所需模型，并在连续 12 个候选失败时停止；修正问题后可从同一目录续跑。
+
+Qwen 模型权重缓存遵循显式 `HF_HUB_CACHE` 或 `HF_HOME`；未配置时放入资源目录的 `hf_cache/hub`。Xet 缓存默认使用资源目录（或显式 `HF_HOME`）下的 `hf_cache/xet`（`HF_HOME` 已设置时为其 `xet` 子目录），可在进程启动前通过 `HF_XET_CACHE` 覆盖。若 Hugging Face 库已在同一进程中导入，请在导入前设置这些缓存变量；这不会迁移或更改 SDK 的登录凭据。
 
 Qwen 使用模型的语音编码帧率将单条发言预算转换成 `max_new_tokens`。上游接口不返回结束原因，因此音频长度接近上限时会保守标记为疑似截断；这项检查无法识别提前停止或发音错误，仍需抽听或另行评估。
 

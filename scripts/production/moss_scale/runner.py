@@ -96,8 +96,14 @@ def check_inputs():
                 import torch
                 if not torch.cuda.is_available():
                     errors.append("Qwen CUDA was requested but CUDA is unavailable.")
+                else:
+                    index = int(device.split(":", 1)[1]) if ":" in device else 0
+                    if index >= torch.cuda.device_count():
+                        errors.append("Requested Qwen CUDA device index is unavailable.")
             except ImportError:
                 pass
+            except RuntimeError:
+                errors.append("Qwen CUDA could not be initialized.")
         elif device != "cpu":
             errors.append("Qwen device must be cpu or cuda[:index].")
     elif backend == "kokoro":
@@ -158,7 +164,8 @@ def main():
     if args.tts_device is not None:
         os.environ["TTS_DEVICE"] = args.tts_device
     legacy_voices = resources_root() / "voices/AISHELL-3/manifest.json"
-    if legacy_voices.is_file() and not os.environ.get("VOICE_REGISTRY"):
+    if (os.environ["TTS_BACKEND"] == "moss_onnx" and legacy_voices.is_file()
+            and not os.environ.get("VOICE_REGISTRY")):
         os.environ.setdefault("VOICE_MANIFEST", str(legacy_voices))
     if args.check:
         errors = check_inputs()
@@ -211,6 +218,9 @@ def main():
         if stop_requested():
             return
         synth=FastSynth(root/"staging")
+        if os.environ["TTS_BACKEND"] == "qwen3":
+            from scripts.text.voices import reference_voices
+            synth.backend.prepare(include_references=bool(reference_voices()))
         failures=0
         def next_index(index):
             while any((root/name/f"{dialogue_id(index, args.language)}.json").exists()
@@ -260,10 +270,7 @@ def main():
                 log.flush()
                 print(json.dumps(row,ensure_ascii=False),flush=True)
                 if failures >= 12:
-                    if not args.continuous:
-                        raise RuntimeError("连续12个候选出错，详见 events.jsonl")
-                    time.sleep(60)
-                    failures = 0
+                    raise RuntimeError("连续12个候选出错，已停止以避免持续消耗；详见 events.jsonl")
                 index=following
             if future is not None:
                 future.cancel()
