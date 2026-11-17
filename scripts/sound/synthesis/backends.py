@@ -103,6 +103,9 @@ class MossOnnxBackend:
 class QwenBackend:
     """Qwen preset and clone models, loaded lazily when a voice needs each model."""
     capabilities={"cpu":True,"gpu":True,"voice_cloning":True,"reference_text_required":False}
+    def prepare_production(self, root, include_references=False):
+        from .qwen_production import prepare_models
+        return prepare_models(self, root, include_references)
     def __init__(self,tmp:Path):
         from scripts.production.moss_scale.config import resources_root
         cache_base = Path(os.environ["HF_HOME"]).expanduser() if os.environ.get("HF_HOME") else resources_root() / "hf_cache"
@@ -163,6 +166,7 @@ class QwenBackend:
                 name=os.environ.get("TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-Base")
             else:
                 name=os.environ.get("QWEN_PRESET_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice")
+            name = getattr(self, "production_paths", {}).get(kind, name)
             previous = logging.root.manager.disable
             logging.disable(logging.CRITICAL)
             try:

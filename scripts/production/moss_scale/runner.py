@@ -196,6 +196,18 @@ def main():
         else:
             os.environ.pop("CHORUS_RUN_TAG", None)
         dedupe_db = Path(os.environ["CHORUS_DEDUPE_DB"]) if os.environ.get("CHORUS_DEDUPE_DB") else None
+        production_backend = None
+        if os.environ["TTS_BACKEND"] == "qwen3":
+            for receipt_path in (root / "completed").glob("*.json"):
+                profile = json.loads(receipt_path.read_text(encoding="utf-8"))["annotation"].get("profile", {})
+                if profile.get("tts_backend", "moss_onnx") != "qwen3":
+                    parser.error("Choose a separate --root for each TTS backend.")
+                if profile.get("language", "zh") != args.language:
+                    parser.error("Choose a separate --root for each production language.")
+            from scripts.sound.synthesis.backends import create_backend
+            from scripts.text.voices import reference_voices
+            production_backend = create_backend(root / "staging" / "_binding.wav")
+            production_backend.prepare_production(root, include_references=bool(reference_voices()))
         recover_deliveries(root, dedupe_db)
         for receipt_path in (root / "completed").glob("*.json"):
             annotation = json.loads(receipt_path.read_text(encoding="utf-8"))["annotation"]
@@ -220,6 +232,7 @@ def main():
         synth=FastSynth(root/"staging")
         if os.environ["TTS_BACKEND"] == "qwen3":
             from scripts.text.voices import reference_voices
+            synth.backend = production_backend
             synth.backend.prepare(include_references=bool(reference_voices()))
         failures=0
         def next_index(index):

@@ -327,9 +327,11 @@ class BackendTests(unittest.TestCase):
              patch.object(runner, "load_env"), patch.object(runner, "check_inputs", return_value=[]), \
              patch.object(runner, "recover_deliveries"), patch.object(runner, "DeliveryIndex") as index, \
              patch.object(runner, "FastSynth") as synth, patch.object(runner, "generate") as generate, \
+             patch("scripts.sound.synthesis.backends.create_backend") as create, \
              patch("scripts.text.voices.reference_voices", return_value={}), \
              patch.object(sys, "argv", ["scale_moss", "--root", folder, "--hours", ".01", "--tts-backend", "qwen3"]):
             index.return_value.hours = 0
+            create.return_value = synth.return_value.backend
             synth.return_value.backend.prepare.side_effect = RuntimeError("synthetic load failure")
             with self.assertRaisesRegex(RuntimeError, "synthetic load failure"):
                 runner.main()
