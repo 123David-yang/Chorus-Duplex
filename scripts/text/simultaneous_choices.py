@@ -71,11 +71,54 @@ ALTERNATE_CHOICES = {
     },
 }
 
+EXTRA_CHOICES = {
+    "zh": {
+        "家庭日常": ("周六整理冰箱", "周日整理冰箱"),
+        "饮食与生活": ("午餐做饺子", "午餐做面条"),
+        "职场办公": ("在会议室开会", "通过视频开会"),
+        "旅行出行": ("早上出发", "下午出发"),
+        "教育学习": ("先做习题", "先回顾笔记"),
+        "消费购物": ("选黑色款", "选白色款"),
+        "娱乐影视": ("周六看那部电影", "周日看那部电影"),
+        "邻里社区": ("在室内办活动", "在室外办活动"),
+        "运动健身": ("先做力量训练", "先做拉伸运动"),
+        "科技数码": ("买黑色键盘", "买白色键盘"),
+        "理财生活": ("每月初记账", "每月末记账"),
+        "宠物": ("周六带宠物去复查", "周日带宠物去复查"),
+        "家居装修": ("把墙刷成米色", "把墙刷成浅蓝色"),
+        "节庆聚会": ("周六举办聚会", "周日举办聚会"),
+        "兴趣爱好": ("周六练习吉他", "周日练习吉他"),
+    },
+    "en": {
+        "travel plans": ("leave in the morning", "leave in the afternoon"),
+        "home maintenance": ("paint the room beige", "paint it light blue"),
+        "work coordination": ("meet in person", "meet by video"),
+        "meal planning": ("make dumplings for lunch", "make noodles for lunch"),
+        "local events": ("hold the event indoors", "hold the event outdoors"),
+        "pet care": ("visit the vet on Saturday", "visit the vet on Sunday"),
+        "technology": ("buy the black keyboard", "buy the white keyboard"),
+        "shopping": ("choose the black version", "choose the white version"),
+        "study plans": ("do practice questions first", "review notes first"),
+        "community projects": ("meet in person", "meet by video"),
+        "outdoor activities": ("go hiking in the morning", "go hiking in the afternoon"),
+        "family logistics": ("organize the fridge on Saturday", "organize the fridge on Sunday"),
+    },
+}
+
 
 def choice_option_sets(language, topic):
     first = CHOICE_OPTIONS[language].get(topic, DEFAULT_CHOICES[language])
     second = ALTERNATE_CHOICES[language].get(topic, DEFAULT_CHOICES[language])
-    return (first, second)
+    extra = EXTRA_CHOICES[language].get(topic, DEFAULT_CHOICES[language])
+    return tuple(dict.fromkeys((first, second, extra)))
+
+
+def generation_choice_option_sets(language, topic):
+    options = choice_option_sets(language, topic)
+    # Preserve old receipts while no longer generating an ambiguous film/documentary pair.
+    if language == "zh" and topic == "娱乐影视":
+        return tuple(pair for pair in options if pair != ("看电影", "看纪录片"))
+    return options
 
 
 def choice_setup_texts(language, choices):
@@ -98,8 +141,14 @@ def choice_request_texts(language, choices):
                 f"Could you help us decide whether to {choices[0]} or {choices[1]}?")
     return (f"我们{choices[0]}还是{choices[1]}，你能帮我们选一下吗？",
             f"你帮我们看看，是{choices[0]}好，还是{choices[1]}好？",
-            f"我们在{choices[0]}和{choices[1]}之间犹豫，你有什么建议？",
-            f"{choices[0]}或者{choices[1]}，你能帮我们拿个主意吗？")
+            f"这两个方案——{choices[0]}和{choices[1]}，你有什么建议？",
+            f"{choices[0]}或者{choices[1]}，你能帮我们拿个主意吗？",
+            f"我们在{choices[0]}和{choices[1]}之间犹豫，你有什么建议？")
+
+
+def generation_choice_request_texts(language, choices):
+    texts = choice_request_texts(language, choices)
+    return texts[:-1] if language == "zh" else texts
 
 
 def choice_request_text(language, choices):
@@ -142,6 +191,16 @@ CHOICE_RESOLUTIONS = {
     "en": (("Let's go with the first option.", "I'll choose the first one.", "Let's pick option one.", "The first choice it is."),
            ("Let's go with the second option.", "I'll choose the second one.", "Let's pick option two.", "The second choice it is.")),
 }
+PERSONAL_RESOLUTIONS = {
+    "zh": (("我还是选第一个。", "我个人更倾向第一种。", "我的选择是第一个。"),
+           ("我还是选第二个。", "我个人更倾向第二种。", "我的选择是第二个。")),
+    "en": (("I still prefer the first option.", "My choice is the first one.", "I'd stick with option one."),
+           ("I still prefer the second option.", "My choice is the second one.", "I'd stick with option two.")),
+}
+CHOICE_RESOLUTIONS = {
+    language: tuple(CHOICE_RESOLUTIONS[language][index] + PERSONAL_RESOLUTIONS[language][index] for index in (0, 1))
+    for language in ("zh", "en")
+}
 CHOICE_CONFIRMATIONS = {
     "zh": ("好，我就按照你选择的方案给出建议。", "明白，我会基于你选的方案提供建议。",
            "好，那我们就按这个选择继续讨论。", "了解，接下来就围绕这个方案来看。"),
@@ -149,4 +208,39 @@ CHOICE_CONFIRMATIONS = {
            "Okay, I'll give suggestions based on your choice.",
            "All right, let's continue with that choice.",
            "Understood. I'll focus on the option you selected."),
+}
+PERSONAL_CONFIRMATIONS = {
+    "zh": ("好，我先按你选的方案继续分析。", "明白，我会基于你的选择给出建议。",
+           "好的，我先围绕你倾向的方案说明。", "了解，我先从你的选择说起。"),
+    "en": ("Got it. I'll focus on your choice for now.", "Okay, I'll base my suggestions on your choice.",
+           "Understood. I'll start with the option you prefer.", "All right, let's consider your choice first."),
+}
+CHOICE_CONFIRMATIONS = {language: CHOICE_CONFIRMATIONS[language] + PERSONAL_CONFIRMATIONS[language]
+                        for language in ("zh", "en")}
+
+CHOICE_ACKNOWLEDGEMENTS = {
+    "zh": {
+        "agreement": ("好，这次我可以先按你说的。", "可以，这次我同意先这样试试。", "行，那这次先按你的选择来。"),
+        "open": ("我还是倾向另一种，不过可以先比较一下。", "我暂时想法不同，先把两个方案都看看吧。",
+                 "我还没决定，咱们先听听两种方案的区别。"),
+    },
+    "en": {
+        "agreement": ("Okay, I can go with your choice this time.", "That's fine with me for now.",
+                      "All right, let's try your choice this time."),
+        "open": ("I still prefer the other option, but let's compare them first.",
+                 "I'm not convinced yet; let's look at both choices.",
+                 "I haven't decided. Let's hear how the two options compare."),
+    },
+}
+JOINT_CONFIRMATIONS = {
+    "zh": {
+        "agreement": ("好，那我先按你们两位商量的方向继续。", "明白，先按你们刚才商量的选择分析。"),
+        "open": ("好，我们先比较两个方案，不急着替你们决定。", "明白，我先说明两种方案的区别。"),
+    },
+    "en": {
+        "agreement": ("Okay, I'll start with the direction you two agreed to try.",
+                      "Got it. Let's continue with the option you both agreed to try."),
+        "open": ("Okay, let's compare both options before deciding.",
+                 "Understood. I'll explain the differences between the two choices first."),
+    },
 }

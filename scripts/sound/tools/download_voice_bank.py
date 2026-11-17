@@ -2,6 +2,7 @@
 
 def main():
     from pathlib import Path
+    from scripts.production.moss_scale.config import resources_root
     import urllib.request,json,wave,io,hashlib,concurrent.futures,argparse
     def fetch(url):
      for attempt in range(4):
@@ -11,7 +12,7 @@ def main():
        if attempt==3: raise
 
     ap=argparse.ArgumentParser(description='Download a small licensed AISHELL-3 reference bank, not the full corpus')
-    ap.add_argument('--out',default=r'D:\DuplexVoice_resources\voices\AISHELL-3')
+    ap.add_argument('--out',default=str(resources_root()/'voices'/'AISHELL-3'))
     args=ap.parse_args()
     out=Path(args.out)
     if (out/'manifest.json').exists(): raise FileExistsError('Choose a new bank directory to preserve provenance')
@@ -36,7 +37,7 @@ def main():
        p=out/(sid+'.wav'); p.write_bytes(data)
        attrs=next((line.split() for line in info.splitlines() if line.startswith(sid)),[])
        gender='女声' if 'female' in attrs else '男声' if 'male' in attrs else '未知'
-       return {'id':'aishell3_'+sid,'speaker_id':sid,'gender':gender,'attributes':attrs,'reference_audio':str(p),'duration_s':round(duration,3),'sample_rate':sr,'channels':channels,'sha256':hashlib.sha256(data).hexdigest(),'source_url':base+row['path'],'license':'Apache-2.0'}
+       return {'id':'aishell3_'+sid,'speaker_id':sid,'gender':gender,'attributes':attrs,'reference_audio':p.name,'duration_s':round(duration,3),'sample_rate':sr,'channels':channels,'sha256':hashlib.sha256(data).hexdigest(),'source_url':base+row['path'],'license':'Apache-2.0'}
      return None
     # Download a small reference bank rather than the entire 19GB corpus.
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:

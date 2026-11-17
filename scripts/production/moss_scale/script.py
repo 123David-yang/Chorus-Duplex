@@ -7,15 +7,17 @@ import re
 
 from scripts.config import TOPIC_DOMAINS
 from scripts.text.oneshot_agent.lexicon import load_bank
-from scripts.text.quality import unsupported_assistant_action
+from scripts.text.quality import prior_preference_conflict, unsupported_assistant_action
 from scripts.text.simultaneous_choices import (
-    CHOICE_CONFIRMATIONS, CHOICE_RESOLUTIONS, CONFLICTING_CHOICES, CONFLICT_CLARIFICATIONS,
+    CHOICE_ACKNOWLEDGEMENTS, JOINT_CONFIRMATIONS, CHOICE_CONFIRMATIONS, CHOICE_RESOLUTIONS,
+    CONFLICTING_CHOICES, CONFLICT_CLARIFICATIONS,
     choice_option_sets, choice_request_texts, choice_setup_texts,
 )
 from scripts.text.utils.llm import chat
 from scripts.text.voices import gender_of, reference_voices, voice_bindings_snapshot, voices_for_dialogue
 
 from .slots import EN_TRANSITION_PIVOTS, TRANSITION_PIVOTS, draft_from_slots, plan_slots
+from .errors import safe_diagnostic
 from .storage import atomic_json
 
 
@@ -39,7 +41,7 @@ SCENE_SEEDS = (
 )
 
 
-def dialogue_id(index, language="zh", backend=None):
+def dialogue_id(index, language="zh", backend=None, run_tag=None):
     backend = backend or os.environ.get("TTS_BACKEND", "moss_onnx")
     if backend == "moss_onnx":
         name = "moss"
@@ -48,11 +50,50 @@ def dialogue_id(index, language="zh", backend=None):
     else:
         name = "custom-" + hashlib.sha256(backend.encode("utf-8")).hexdigest()[:12]
     prefix = f"{name}-scale-en-20261115" if language == "en" else f"{name}-scale-20261115"
+    run_tag = os.environ.get("CHORUS_RUN_TAG", "") if run_tag is None else run_tag
+    if run_tag:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}", run_tag):
+            raise ValueError("Invalid production run tag")
+        prefix += f"-{run_tag}"
     return f"{prefix}-{index:06d}"
 
 
 def incomplete_pause_range(turn):
     return HANDOFF_PAUSE_MS if turn.get("resolution") == "assistant_handoff" else SELF_RESUME_PAUSE_MS
+
+
+def incomplete_has_content(text, language):
+    """Reject a hesitation consisting only of fillers, without claiming semantic validation."""
+    if language == "en":
+        text = re.sub(r"\b(?:uh+|um+|erm+|let me think|give me a second|one moment)\b", "", text, flags=re.I)
+    else:
+        text = re.sub(r"(?:让我想一想|让我想想|等我想想|我想一下|我想想|那个|这个|呃+|嗯+|啊+)", "", text)
+    return bool(re.search(r"\w", text))
+
+
+def distinct_voice_cast(ident, requested_users, wants_third_party):
+    """Fit the cast to distinct registered voice bindings before requesting a draft."""
+    probe = voices_for_dialogue(ident, 1)
+    candidates = [probe["user_01"]] + [probe[f"third_party_{i:02d}"] for i in range(1, 7)]
+    bindings = voice_bindings_snapshot([probe["assistant"], *candidates])
+    assistant_binding = bindings[probe["assistant"]]
+    assistant_key = (assistant_binding["kind"], str(assistant_binding.get("speaker", assistant_binding.get("sha256", ""))).casefold())
+    unique, seen = [], {assistant_key}
+    for voice in candidates:
+        binding = bindings[voice]
+        key = (binding["kind"], str(binding.get("speaker", binding.get("sha256", ""))).casefold())
+        if key not in seen:
+            unique.append(voice)
+            seen.add(key)
+    if not unique:
+        raise ValueError("No distinct participant voice is available")
+    include_third = wants_third_party and len(unique) >= 2
+    count = min(requested_users, len(unique) - int(include_third))
+    mapping = {"assistant": probe["assistant"]}
+    mapping.update({f"user_{i+1:02d}": voice for i, voice in enumerate(unique[:count])})
+    if include_third:
+        mapping["third_party_01"] = unique[count]
+    return count, mapping, include_third
 
 
 class BackchannelTooLong(ValueError):
@@ -118,8 +159,6 @@ def generate(index, root, mode="direct", language="zh"):
         return draft
     rng = random.Random(index + 20261115)
     count = 3 if index == 0 else rng.choices(range(1, 7), [1, 3, 3, 3, 2, 1])[0]
-    users = [f"user_{n:02d}" for n in range(1, count + 1)]
-    mapping = voices_for_dialogue(ident, count)
     turns = rng.choice([14, 16, 18, 20])
     events = [kind for kind, probability in (
         ("incomplete", .70), ("backchannel", .95), ("interruption", .66), ("side_talk", .55)
@@ -130,6 +169,13 @@ def generate(index, root, mode="direct", language="zh"):
         events.extend(rng.sample(remaining, 3 - len(events)))
     if index == 0:
         events = ["incomplete", "backchannel"]
+    count, mapping, include_third = distinct_voice_cast(ident, count, "side_talk" in events)
+    if "side_talk" in events and not include_third:
+        events.remove("side_talk")
+        remaining = [kind for kind in ("backchannel", "interruption", "incomplete") if kind not in events]
+        if remaining:
+            events.append(rng.choice(remaining))
+    users = [f"user_{n:02d}" for n in range(1, count + 1)]
     listener_rng = random.Random(f"{ident}-listener-sequence")
     simultaneous = index == 0 or (count >= 2 and listener_rng.random() < .5)
     repeat_listener = not simultaneous and (count == 1 or listener_rng.random() < .4)
@@ -146,7 +192,9 @@ def generate(index, root, mode="direct", language="zh"):
     ).random() < .15
     topics = EN_TOPICS if language == "en" else TOPIC_DOMAINS
     relationships = ["neighbors", "coworkers", "old friends", "family", "temporary teammates"] if language == "en" else ["邻居", "同事", "老朋友", "家人", "临时组队"]
-    scene = rng.choice(SCENE_SEEDS)[int(language == "en")]
+    scene = (rng.choice(("当面讨论", "线上语音讨论", "短暂碰面商量")) if language == "zh"
+             else rng.choice(("in-person discussion", "voice-call discussion", "a brief planning conversation"))) \
+            if simultaneous_requests else rng.choice(SCENE_SEEDS)[int(language == "en")]
     context = {
         "领域": topics[index % len(topics)],
         "关系": rng.choice(relationships),
@@ -185,9 +233,16 @@ def generate(index, root, mode="direct", language="zh"):
                 validate(d, users, events, group, group_interrupt, **options)
             break
         except (ValueError, KeyError, TypeError) as exc:
+            diagnostic = safe_diagnostic(exc)
+            from .upload_delivery import _assert_public_safe
+            try:
+                _assert_public_safe(d)
+                safe_draft = d
+            except ValueError:
+                safe_draft = None
             atomic_json(root/"staging"/f"{ident}-planned-reject-{attempt}.json",
-                        {"error":str(exc), "draft":d})
-            context["上次问题"] = str(exc)
+                        {"error":diagnostic["hint"], "code":diagnostic["code"], "draft":safe_draft})
+            context["上次问题"] = diagnostic["hint"]
             if attempt:
                 raise
     d.update(dialogue_id=ident, scenario="side_talk" if "side_talk" in events else "multi_qa")
@@ -204,6 +259,8 @@ def generate(index, root, mode="direct", language="zh"):
     refs = reference_voices()
     d["profile"] = {"generator":"moss_scale_v1","tts_backend":backend,"voice_assignments":voices,
                     "voice_bindings":voice_bindings_snapshot(voices.values()),
+                    "distinct_speaker_voices":True,
+                    "strict_choice_consistency":True,
                     "voice_references":{v:{k:refs[v][k] for k in ("source_url","license","sha256")}
                                         for v in voices.values() if v in refs},
                     "topic_domain":context["领域"],"requested_events":events,
@@ -279,8 +336,10 @@ def validate(
             raise ValueError("第三方须标作 side_talk")
         interaction = t.get("interaction")
         if interaction not in (None, "choice_request", "choice_setup", "simultaneous_requests", "conflict_clarification",
-                               "choice_resolution", "choice_confirmation"):
+                               "choice_resolution", "choice_acknowledgement", "choice_confirmation"):
             raise ValueError("未知对话交互类型")
+        if t.get("choice_outcome") is not None and interaction not in ("choice_acknowledgement", "choice_confirmation"):
+            raise ValueError("选择结果只能标注在协商回应或确认轮")
         if t.get("overlap_with") is not None:
             other = t["overlap_with"]
             if (not simultaneous_requests or type(other) is not int or other != i - 1 or other < 0
@@ -313,6 +372,9 @@ def validate(
             pair = (first["text"], content) if indices == (0, 1) else (content, first["text"])
             if pair not in CONFLICTING_CHOICES[language]:
                 raise ValueError("同时请求台词必须与对应的选项一致")
+            if any(prior_preference_conflict(turns, turn["speaker"], other, choices, turn["choice_index"], language)
+                   for turn in (first, t)):
+                raise ValueError("同时选择与此前本人明确偏好冲突")
             following = turns[i+1] if i+1 < len(turns) else {}
             if (following.get("speaker") != "assistant" or following.get("kind") != "speech"
                 or following.get("responds_to") != [other, i]
@@ -329,13 +391,31 @@ def validate(
                 or type(selected) is not int or selected != previous_choice
                 or resolution.get("text") not in CHOICE_RESOLUTIONS[language][selected]):
                 raise ValueError("用户须在澄清后明确选择一个已列出的方案")
-            confirmation = turns[i+3] if i+3 < len(turns) else {}
-            if (confirmation.get("speaker") != "assistant" or confirmation.get("kind") != "speech"
-                or confirmation.get("responds_to") != [i+2]
-                or confirmation.get("interaction") != "choice_confirmation"
-                or confirmation.get("addressee") not in (resolution["speaker"], [resolution["speaker"]])
-                or confirmation.get("text") not in CHOICE_CONFIRMATIONS[language]):
-                raise ValueError("助手须确认用户的选择并基于此提供建议")
+            next_turn = turns[i+3] if i+3 < len(turns) else {}
+            if next_turn.get("interaction") == "choice_acknowledgement":
+                outcome = next_turn.get("choice_outcome")
+                other_speaker = speaker if resolution["speaker"] == first["speaker"] else first["speaker"]
+                if (outcome not in ("agreement", "open") or next_turn.get("speaker") != other_speaker
+                    or next_turn.get("kind") != "speech" or next_turn.get("responds_to") != [i+2]
+                    or next_turn.get("addressee") not in (resolution["speaker"], [resolution["speaker"]])
+                    or next_turn.get("text") not in CHOICE_ACKNOWLEDGEMENTS[language][outcome]):
+                    raise ValueError("另一位参与者须明确回应分歧")
+                confirmation = turns[i+4] if i+4 < len(turns) else {}
+                if (confirmation.get("speaker") != "assistant" or confirmation.get("kind") != "speech"
+                    or confirmation.get("responds_to") != [i+2, i+3]
+                    or confirmation.get("interaction") != "choice_confirmation"
+                    or confirmation.get("choice_outcome") != outcome
+                    or confirmation.get("addressee") not in ("all", ["all"])
+                    or confirmation.get("text") not in JOINT_CONFIRMATIONS[language][outcome]):
+                    raise ValueError("助手须根据两人的实际态度继续")
+            else:
+                confirmation = next_turn  # Older deliveries confirmed one person's preference only.
+                if (confirmation.get("speaker") != "assistant" or confirmation.get("kind") != "speech"
+                    or confirmation.get("responds_to") != [i+2]
+                    or confirmation.get("interaction") != "choice_confirmation"
+                    or confirmation.get("addressee") not in (resolution["speaker"], [resolution["speaker"]])
+                    or confirmation.get("text") not in CHOICE_CONFIRMATIONS[language]):
+                    raise ValueError("助手须确认用户的选择并基于此提供建议")
             simultaneous_pairs += 1
         resolution = t.get("resolution")
         if resolution is not None and (kind != "incomplete" or resolution != "assistant_handoff"):
@@ -348,6 +428,8 @@ def validate(
                 or any(not isinstance(part, str) or not part.strip() for part in parts)
                 or "".join(parts) != content or parts[0].rstrip().endswith(("。", "？", "！", "?", "!"))):
                 raise ValueError(f"incomplete 需要 {expected_parts} 个与正文一致的发声片段")
+            if not incomplete_has_content(parts[0], language):
+                raise ValueError("incomplete 停顿前须有实际没说完的内容，不能只有犹豫词")
             if handoff:
                 next_turn = turns[i+1] if i+1 < len(turns) else {}
                 if (not hesitation_handoff or speaker not in users

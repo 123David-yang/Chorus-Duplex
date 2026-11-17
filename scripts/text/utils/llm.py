@@ -75,7 +75,23 @@ def chat(system: str,user: str,temperature: float=1.0,max_tokens: int=512, *, js
         for attempt in range(2):
             try:
                 with opener.open(req, timeout=120) as response:
-                    data=json.loads(response.read().decode("utf-8"))
+                    try:
+                        data = json.loads(response.read().decode("utf-8"))
+                    except http.client.IncompleteRead as exc:
+                        # Some servers close early despite sending a complete JSON body.
+                        # Accept only a parseable, explicitly finished response; never retry
+                        # an already-paid request merely because the connection closed.
+                        meta["incomplete_bytes"] = len(exc.partial)
+                        try:
+                            candidate = json.loads(exc.partial.decode("utf-8"))
+                            choice = candidate["choices"][0]
+                            content = choice["message"]["content"]
+                            if choice.get("finish_reason") != "stop" or not isinstance(content, str) or not content.strip():
+                                raise ValueError("response not complete")
+                        except (UnicodeDecodeError, ValueError, KeyError, IndexError, TypeError, AttributeError):
+                            raise RuntimeError("LLM response was incomplete") from None
+                        data = candidate
+                        meta["recovered_complete_json"] = True
                 break
             except urllib.error.HTTPError:
                 raise

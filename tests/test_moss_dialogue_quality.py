@@ -14,12 +14,16 @@ from unittest.mock import patch
 import numpy as np
 
 from scripts.production.moss_scale.render import render
-from scripts.production.moss_scale.script import dialogue_id, generate, validate
+from scripts.production.moss_scale.script import dialogue_id, generate, validate, incomplete_has_content
 from scripts.production.moss_scale.slots import draft_from_slots, plan_slots, shorten_backchannel_prefix
-from scripts.text.quality import ai_request_candidates, audit, repeated_incomplete_start, unsupported_assistant_action
-from scripts.text.simultaneous_choices import ALTERNATE_CHOICES, CHOICE_OPTIONS
+from scripts.text.quality import (ai_request_candidates, audit, repeated_incomplete_start,
+                                  numeric_safety_advice_needs_review, prior_preference_conflict,
+                                  unsupported_assistant_action)
+from scripts.text.simultaneous_choices import (ALTERNATE_CHOICES, CHOICE_OPTIONS, CHOICE_CONFIRMATIONS, choice_option_sets,
+                                               generation_choice_option_sets, choice_request_texts,
+                                               generation_choice_request_texts)
 from scripts.text.utils.schema import Dialogue
-from scripts.text.utils.llm import chat
+from scripts.text.utils.llm import chat, capture_calls
 
 
 class FakeSynth:
@@ -66,16 +70,58 @@ def draft(language, mode, seed=15):
 
 
 class DialogueQualityTests(unittest.TestCase):
+    def test_incomplete_needs_content_before_the_hesitation(self):
+        for text in ("我想一下……", "嗯，那个……"):
+            self.assertFalse(incomplete_has_content(text, "zh"))
+        for text in ("Um...", "Let me think…"):
+            self.assertFalse(incomplete_has_content(text, "en"))
+        self.assertTrue(incomplete_has_content("出发的时间是……那个……", "zh"))
+        self.assertTrue(incomplete_has_content("The departure time is… um…", "en"))
+
+    def test_explicit_prior_preference_reversal_is_detected(self):
+        turns = [{"speaker": "user_03", "text": "I actually prefer Saturday because I have plans Sunday afternoon."}]
+        options = ["clean the house on Saturday", "clean the house on Sunday"]
+        self.assertTrue(prior_preference_conflict(turns, "user_03", 1, options, 1, "en"))
+        self.assertFalse(prior_preference_conflict(turns, "user_03", 1, options, 0, "en"))
+        turns = [{"speaker": "user_01", "text": "我更倾向上午，下午还要处理材料。"}]
+        self.assertTrue(prior_preference_conflict(turns, "user_01", 1, ["上午开会", "下午开会"], 1, "zh"))
+
+    def test_future_reminder_claims_are_flagged_but_current_reminder_is_allowed(self):
+        self.assertTrue(unsupported_assistant_action("到点我来提醒你们对照两栏。"))
+        self.assertTrue(unsupported_assistant_action("I'll remind you tomorrow."))
+        self.assertFalse(unsupported_assistant_action("我提醒一下，先核对时间。"))
+
+    def test_quantified_food_safety_advice_is_flagged_for_review_not_rejection(self):
+        self.assertTrue(numeric_safety_advice_needs_review("Steam the dumplings for 10–15 minutes."))
+        self.assertTrue(numeric_safety_advice_needs_review("先蒸10到15分钟。"))
+        self.assertTrue(numeric_safety_advice_needs_review("冰块超过两厘米就先敲小。"))
+        self.assertTrue(numeric_safety_advice_needs_review("The standard return window is thirty days."))
+        self.assertFalse(numeric_safety_advice_needs_review("We'll meet at 9 in the morning."))
+
+    def test_unique_run_tags_preserve_legacy_ids_and_separate_new_runs(self):
+        with patch.dict(os.environ, {}, clear=True):
+            old_id = dialogue_id(17, "en", "moss_onnx")
+            first = dialogue_id(17, "en", "moss_onnx", run_tag="gpu-a")
+            second = dialogue_id(17, "en", "moss_onnx", run_tag="gpu-b")
+            self.assertEqual(old_id, "moss-scale-en-20261115-000017")
+            self.assertEqual(len({old_id, first, second}), 3)
+            with self.assertRaises(ValueError):
+                dialogue_id(17, "en", "moss_onnx", run_tag="../bad")
+
     def test_simultaneous_choice_templates_vary_and_remain_valid(self):
         for language in ("zh", "en"):
             seen = {"choice_request": set(), "choice_setup": set(), "choice_confirmation": set()}
+            outcomes = set()
             for seed in range(40):
                 dialogue = draft(language, "direct", seed=seed)
                 for turn in dialogue["turns"]:
                     if turn.get("interaction") in seen:
                         seen[turn["interaction"]].add(turn["text"])
+                    if turn.get("interaction") == "choice_acknowledgement":
+                        outcomes.add(turn["choice_outcome"])
             for interaction, texts in seen.items():
                 self.assertGreaterEqual(len(texts), 3, (language, interaction))
+            self.assertEqual(outcomes, {"agreement", "open"})
 
     def test_each_supported_topic_has_two_distinct_option_pairs(self):
         for language in ("zh", "en"):
@@ -85,6 +131,13 @@ class DialogueQualityTests(unittest.TestCase):
                 self.assertEqual(len(set(first)), 2, topic)
                 self.assertEqual(len(set(second)), 2, topic)
                 self.assertNotEqual(first, second, topic)
+                self.assertEqual(len(choice_option_sets(language, topic)), 3, topic)
+        self.assertNotIn(("看电影", "看纪录片"), generation_choice_option_sets("zh", "娱乐影视"))
+        self.assertIn(("看电影", "看纪录片"), choice_option_sets("zh", "娱乐影视"))
+        choices = ("在室内办活动", "在室外办活动")
+        legacy = "我们在在室内办活动和在室外办活动之间犹豫，你有什么建议？"
+        self.assertIn(legacy, choice_request_texts("zh", choices))
+        self.assertNotIn(legacy, generation_choice_request_texts("zh", choices))
 
     def test_schema_round_trip_keeps_moss_optional_fields(self):
         original = draft("en", "direct")
@@ -94,6 +147,28 @@ class DialogueQualityTests(unittest.TestCase):
                          [t.get("interaction") for t in restored["turns"]])
         self.assertEqual([t.get("overlap_with") for t in original["turns"]],
                          [t.get("overlap_with") for t in restored["turns"]])
+        self.assertEqual([t.get("choice_outcome") for t in original["turns"]],
+                         [t.get("choice_outcome") for t in restored["turns"]])
+
+    def test_previous_choice_confirmation_format_remains_valid(self):
+        for language in ("zh", "en"):
+            dialogue = draft(language, "direct")
+            turns = dialogue["turns"]
+            ack_index = next(i for i, turn in enumerate(turns) if turn.get("interaction") == "choice_acknowledgement")
+            resolution_index = ack_index - 1
+            del turns[ack_index]
+            for i, turn in enumerate(turns):
+                turn["turn_id"] = i
+                turn["responds_to"] = [ref - int(ref > ack_index) for ref in turn["responds_to"] if ref != ack_index]
+                if turn.get("overlap_with") is not None and turn["overlap_with"] > ack_index:
+                    turn["overlap_with"] -= 1
+            confirmation = turns[ack_index]
+            confirmation.pop("choice_outcome", None)
+            confirmation["text"] = CHOICE_CONFIRMATIONS[language][0]
+            confirmation["addressee"] = turns[resolution_index]["speaker"]
+            confirmation["responds_to"] = [resolution_index]
+            validate(dialogue, ["user_01", "user_02"], [], False, language=language, simultaneous_requests=True)
+            self.assertTrue(audit(Dialogue.from_jsonl_line(json.dumps(dialogue)))["passed"])
 
     def test_direct_and_interactive_bilingual_overlap_and_clarification(self):
         for language in ("zh", "en"):
@@ -386,6 +461,41 @@ class DialogueQualityTests(unittest.TestCase):
 
 
 class LLMNetworkTests(unittest.TestCase):
+    def test_complete_json_surviving_early_close_is_used_without_a_second_paid_call(self):
+        payload = json.dumps({"choices": [{"finish_reason": "stop", "message": {"content": "complete reply"}}]}).encode()
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return None
+            def read(self): raise http.client.IncompleteRead(payload, 7)
+        class Opener:
+            calls = 0
+            def open(self, *args, **kwargs):
+                self.calls += 1
+                return Response()
+        opener = Opener()
+        with patch.dict(os.environ, {"LLM_API_KEY": "test-key"}, clear=False), \
+             patch("scripts.text.utils.llm.urllib.request.build_opener", return_value=opener), capture_calls() as calls:
+            self.assertEqual(chat("system", "request"), "complete reply")
+        self.assertEqual(opener.calls, 1)
+        self.assertTrue(calls[0]["recovered_complete_json"])
+
+    def test_truncated_json_is_not_retried_or_treated_as_complete(self):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return None
+            def read(self): raise http.client.IncompleteRead(b'{"choices":[', 50)
+        class Opener:
+            calls = 0
+            def open(self, *args, **kwargs):
+                self.calls += 1
+                return Response()
+        opener = Opener()
+        with patch.dict(os.environ, {"LLM_API_KEY": "test-key"}, clear=False), \
+             patch("scripts.text.utils.llm.urllib.request.build_opener", return_value=opener):
+            with self.assertRaisesRegex(RuntimeError, "incomplete"):
+                chat("system", "request")
+        self.assertEqual(opener.calls, 1)
+
     def test_incomplete_paid_response_is_not_retried(self):
         class Opener:
             calls = 0

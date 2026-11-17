@@ -2,11 +2,11 @@
 import os
 from pathlib import Path
 
-from scripts.config import ROOT
+from scripts.config import ROOT, default_resources_root
 
 
 def resources_root() -> Path:
-    default = Path("D:/DuplexVoice_resources") if os.name == "nt" else ROOT / "resources"
+    default = default_resources_root()
     return Path(os.environ.get("DUPLEX_RESOURCES_DIR", str(default))).expanduser()
 
 
@@ -34,7 +34,8 @@ def kokoro_model_root() -> Path:
 
 
 def default_output_root() -> Path:
-    default = Path("D:/DuplexVoice_production/release_moss_scale_20261115") if os.name == "nt" else ROOT / "output" / "moss"
+    default = (Path("D:/DuplexVoice_production/release_moss_scale_20261115")
+               if os.name == "nt" and Path("D:/").is_dir() else ROOT / "output" / "moss")
     return Path(os.environ.get("DUPLEX_PRODUCTION_ROOT", str(default))).expanduser()
 
 

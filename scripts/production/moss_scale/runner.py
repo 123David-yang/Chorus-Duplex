@@ -12,7 +12,8 @@ import time
 from scripts.config import MOSS_DIR, load_env, resolve_vad_model
 from scripts.production.state.lock import ProductionLock
 
-from .delivery import DeliveryIndex, background_rooms, deliver, recover_deliveries
+from .delivery import DeliveryIndex, DuplicateDeliveryError, background_rooms, deliver, recover_deliveries
+from .errors import safe_diagnostic
 from .render import FastSynth
 from .script import dialogue_id, generate
 
@@ -132,6 +133,7 @@ def main():
     parser.add_argument("--root", type=Path, help="output directory")
     parser.add_argument("--hours", type=float, default=100, help="target credited duration in hours")
     parser.add_argument("--start-index", type=int, default=0, help="first candidate index")
+    parser.add_argument("--run-tag", help="unique public-safe namespace for a new production root")
     parser.add_argument("--continuous", action="store_true", help="continue until stopped")
     parser.add_argument("--draft-mode", choices=("direct", "interactive"), default="direct")
     parser.add_argument("--language", choices=("zh", "en"), default="zh")
@@ -144,6 +146,9 @@ def main():
     if args.start_index < 0:
         parser.error("--start-index must be nonnegative")
     load_env()
+    requested_tag = args.run_tag if args.run_tag is not None else os.environ.get("CHORUS_RUN_TAG", "")
+    if requested_tag and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}", requested_tag):
+        parser.error("--run-tag must be 1–32 letters, digits, underscores or hyphens")
     from .config import default_output_root, resources_root
     default_root = default_output_root()
     root = args.root or (default_root.with_name(default_root.name + "_en")
@@ -161,10 +166,30 @@ def main():
             parser.error("\n".join(errors))
         print("Input check passed. No synthesis performed.")
         return
-    for subdir in ("audio", "scripts", "completed", "staging"):
+    for subdir in ("audio", "scripts", "completed", "staging", "duplicates"):
         (root/subdir).mkdir(parents=True, exist_ok=True)
     with ProductionLock(root):
-        recover_deliveries(root)
+        tag_file = root / "run-tag.json"
+        if tag_file.exists():
+            saved = json.loads(tag_file.read_text(encoding="utf-8"))
+            saved_tag = saved["run_tag"]
+            if requested_tag and requested_tag != saved_tag:
+                parser.error("This production root belongs to another --run-tag.")
+            if saved.get("language") != args.language or saved.get("tts_backend") != os.environ["TTS_BACKEND"]:
+                parser.error("Choose a separate --root for each production language and TTS backend.")
+            requested_tag = saved_tag
+        elif requested_tag:
+            if any(any((root / name).iterdir()) for name in ("audio", "scripts", "completed", "staging")):
+                parser.error("Use an empty production root when introducing --run-tag.")
+            from .storage import atomic_json
+            atomic_json(tag_file, {"run_tag": requested_tag, "language": args.language,
+                                   "tts_backend": os.environ["TTS_BACKEND"]})
+        if requested_tag:
+            os.environ["CHORUS_RUN_TAG"] = requested_tag
+        else:
+            os.environ.pop("CHORUS_RUN_TAG", None)
+        dedupe_db = Path(os.environ["CHORUS_DEDUPE_DB"]) if os.environ.get("CHORUS_DEDUPE_DB") else None
+        recover_deliveries(root, dedupe_db)
         for receipt_path in (root / "completed").glob("*.json"):
             annotation = json.loads(receipt_path.read_text(encoding="utf-8"))["annotation"]
             if annotation.get("profile", {}).get("language", "zh") != args.language:
@@ -180,13 +205,16 @@ def main():
         errors = check_inputs()
         if errors:
             parser.error("\n".join(errors))
-        stop_file = root / "STOP"
-        if args.continuous and stop_file.exists():
+        stop_files = (root / "STOP", root / ".chorus-coordinator-stop")
+        def stop_requested():
+            return any(path.exists() for path in stop_files)
+        if stop_requested():
             return
         synth=FastSynth(root/"staging")
         failures=0
         def next_index(index):
-            while (root/"completed"/f"{dialogue_id(index, args.language)}.json").exists():
+            while any((root/name/f"{dialogue_id(index, args.language)}.json").exists()
+                      for name in ("completed", "duplicates")):
                 index+=1
             return index
         log_path = root / "events.jsonl"
@@ -199,22 +227,34 @@ def main():
                     continue
         index = next_index(start_index)
         with ThreadPoolExecutor(max_workers=1) as pool, log_path.open("a",encoding="utf-8") as log:
-            future=pool.submit(generate,index,root,args.draft_mode,args.language)
-            while (target is None or hours < target) and not (args.continuous and stop_file.exists()):
+            future = None
+            while (target is None or hours < target) and not stop_requested():
                 started=time.monotonic()
                 following=next_index(index+1)
+                if future is None:
+                    future=pool.submit(generate,index,root,args.draft_mode,args.language)
                 try:
                     try:
                         d = future.result()
                     finally:
-                        future = pool.submit(generate, following, root, args.draft_mode, args.language)
-                    receipt=deliver(d,synth,root)
+                        future = None
+                        # Avoid a paid extra draft after STOP or near a finite target.
+                        if not stop_requested() and (target is None or target - hours > .1):
+                            future = pool.submit(generate, following, root, args.draft_mode, args.language)
+                    if stop_requested():
+                        break  # Preserve the drafted script for a later resume; do not start synthesis.
+                    receipt=deliver(d,synth,root,index_state.clean_hashes,dedupe_db)
                     hours=index_state.add(receipt)
                     failures=0
                     row={"index":index,"state":"delivered","credited_seconds":receipt["credited_seconds"],"hours":hours}
+                except DuplicateDeliveryError:
+                    failures += 1
+                    row={"index":index,"state":"duplicate","error":"candidate retained in staging"}
                 except Exception as exc:
                     failures+=1
-                    row={"index":index,"state":"failed","error":str(exc)[:400],"type":type(exc).__name__}
+                    diagnostic = safe_diagnostic(exc)
+                    row={"index":index,"state":"failed","error":diagnostic["hint"],
+                         "type":diagnostic["type"], "code":diagnostic["code"]}
                 row["wall_seconds"]=round(time.monotonic()-started,2)
                 log.write(json.dumps(row,ensure_ascii=False)+"\n")
                 log.flush()
@@ -225,4 +265,5 @@ def main():
                     time.sleep(60)
                     failures = 0
                 index=following
-            future.cancel()
+            if future is not None:
+                future.cancel()

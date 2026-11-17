@@ -23,7 +23,7 @@ def rules_block(dialogue_id: str = "", turns: int = 12) -> str:
     bc_policy = "AI 必须完成一次指向它的附和。" if "ai_backchannel" in required else "本条 AI 不做 backchannel，附和由其他用户承担；AI 留出轮数完成主模块。"
     return """
 【双工质量契约 v3，优先于泛化示例】
-- 事实性建议应符合已知条件；不确定时说明条件或保持审慎，不保证收益、安全或其他无法确认的结果。
+- 事实性建议只依据已知条件；不确定时先说明需核实的条件，不保证收益、安全或其他无法确认的结果；不要预设健康、房屋接线或天气情况，也不要编造设备型号相关的具体阈值。
 - 台词的知识只能来自该轮之前已说出口的历史。人设/导演计划属于私有资料；
   assistant 不得从中得知姓名、职业、经历。用户也只能知道自己的私有背景。
   用户自我介绍或别人先自然喊出名字后，assistant 才能使用该称呼。首次引入姓名
@@ -62,7 +62,7 @@ def unsupported_assistant_action(text):
     english = re.search(
         r"\bi(?:'ll| will| have)\s+"
         r"(?:(?:already|just|personally|go|and)\s+){0,2}"
-        r"(?:buy|bought|purchase|purchased|pick up|send|sent|email|message|call|book|booked|pay|paid)\b",
+        r"(?:buy|bought|purchase|purchased|pick up|send|sent|email|message|call|book|booked|pay|paid|remind)\b",
         text, re.IGNORECASE,
     )
     share = re.search(
@@ -74,7 +74,11 @@ def unsupported_assistant_action(text):
         r"(?:我|我们)(?:已经|刚刚|现在|马上|这就|会)(?:帮你|替你|给你|去|把[^，。]{0,8})?"
         r"(?:买|购买|订|预订|预约|支付|付款|寄|发送|发给|打电话|开车|搬)", text,
     )
-    return bool(english or share or chinese)
+    future_reminder = re.search(
+        r"(?:到点|到时候|到时|稍后|等会儿|明天|届时).{0,8}我(?:来|会|帮你|帮大家)?提醒"
+        r"|我(?:会|到时|稍后|明天|定时).{0,8}提醒(?:你|大家|各位)", text,
+    )
+    return bool(english or share or chinese or future_reminder)
 
 
 def repeated_incomplete_start(parts):
@@ -98,6 +102,58 @@ def explicit_choice_index(text: str) -> int | None:
     return (0 if first else 1) if bool(first) != bool(second) else None
 
 
+def prior_preference_conflict(turns, speaker: str, before: int, options, selected: int, language: str) -> bool:
+    """Detect a narrow explicit preference reversal; absence is not semantic verification."""
+    if not isinstance(options, list) or len(options) != 2 or selected not in (0, 1):
+        return False
+    if language == "en":
+        words = [set(re.findall(r"[a-z]+", option.lower())) for option in options]
+        common = words[0] & words[1]
+        terms = (words[0] - common, words[1] - common)
+    else:
+        pairs = (("上午", "下午"), ("周六", "周日"), ("周一", "周二"), ("室内", "室外"),
+                 ("暖色", "冷色"), ("黑色", "白色"), ("小号", "大号"), ("有线", "无线"),
+                 ("面条", "米饭"), ("高铁", "大巴"), ("米色", "浅蓝色"))
+        terms = (set(), set())
+        for first, second in pairs:
+            if first in options[0] and second in options[1]:
+                terms[0].add(first); terms[1].add(second)
+            elif second in options[0] and first in options[1]:
+                terms[0].add(second); terms[1].add(first)
+    if not terms[0] or not terms[1]:
+        return False
+    for turn in turns[:before]:
+        author = turn.get("speaker") if isinstance(turn, dict) else turn.speaker
+        text = turn.get("text", "") if isinstance(turn, dict) else turn.text
+        if author != speaker or not isinstance(text, str):
+            continue
+        clauses = re.split(r"\b(?:because|but|however|although|though)\b|[,;.!?，。；！？]", text, flags=re.I)
+        for clause in clauses:
+            if language == "en":
+                if not re.search(r"\b(?:prefer|rather|lean(?:ing)?(?:\s+towards?)?|choose|vote for)\b", clause, re.I):
+                    continue
+                if re.search(r"\b(?:not|never|don't|do not)\s+(?:\w+\s+){0,2}(?:prefer|rather|choose)\b|\brather\s+not\b", clause, re.I):
+                    continue
+                mentioned = [any(re.search(r"\b" + re.escape(term) + r"\b", clause, re.I) for term in group) for group in terms]
+            else:
+                if not re.search(r"我.{0,10}(?:更倾向|更喜欢|更想|想选|倾向|偏向|选|更愿意|比较喜欢)", clause):
+                    continue
+                if re.search(r"(?:不|没)(?:想|愿意|喜欢|选|倾向)", clause):
+                    continue
+                mentioned = [any(term in clause for term in group) for group in terms]
+            if mentioned[1 - selected] and not mentioned[selected]:
+                return True
+    return False
+
+
+def numeric_safety_advice_needs_review(text: str) -> bool:
+    """Flag possible unsupported quantified advice for sampling, without auto-rejection."""
+    numeral = r"(?:\d+(?:\.\d+)?|[一二两三四五六七八九十百]+|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|fourteen|thirty)\b)"
+    number = numeral + r"(?:\s*(?:-|–|—|~|至|到)\s*" + numeral + r")?\s*(?:分钟|小时|秒|天|个月|度|厘米|毫米|毫升|毫克|克|minutes?|mins?|hours?|seconds?|days?|weeks?|months?|degrees?|°[cf]|cm|mm|ml|mg)"
+    risk = r"蒸|煮|烤|加热|熟透|过敏|药|剂量|电压|功率|安全|冰块|刀头|转速|退货|保修|cook|steam|boil|bake|heat|allerg|dosage|dose|voltage|safe|blender|ice cube|return|refund|warranty"
+    return bool(re.search(number, text, re.I) and re.search(risk, text, re.I))
+
+
 def ai_request_candidates(d):
     english_requests = re.compile(
         r"\b(?:can you|could you|would you|please|help (?:me|us)|tell me|show me|"
@@ -117,6 +173,19 @@ def audit(d: Dialogue, required: list[str] | None = None) -> dict:
         issues.append({"code": code, "turn_id": i, "detail": detail})
     valid = {p.id for p in d.participants} | {"assistant"}
     valid.update(t.speaker for t in d.turns if t.speaker.startswith("third_party_"))
+    if d.profile.get("distinct_speaker_voices"):
+        assignments = d.profile.get("voice_assignments", {})
+        bindings = d.profile.get("voice_bindings", {})
+        identities = []
+        for speaker in {t.speaker for t in d.turns}:
+            voice = assignments.get(speaker)
+            binding = bindings.get(voice, {})
+            identity = (binding.get("kind"), str(binding.get("speaker", binding.get("sha256", ""))).casefold())
+            if not voice or not identity[0] or not identity[1]:
+                flag("missing_voice_binding", None, "spoken roles need registered voice bindings")
+            identities.append(identity)
+        if len(identities) != len(set(identities)):
+            flag("reused_speaker_voice", None, "spoken roles need distinct voice bindings")
     english = d.profile.get("language") == "en"
     host = None
     counts = {"barge_in": 0, "ai_backchannel": 0, "backchannel": 0, "interruption": 0}
@@ -128,7 +197,7 @@ def audit(d: Dialogue, required: list[str] | None = None) -> dict:
         if t.speaker.startswith("third_party_") != (t.kind=="side_talk"):
             flag("side_talk_speaker_mismatch", i, t.speaker)
         if t.interaction not in (None, "choice_request", "choice_setup", "simultaneous_requests", "conflict_clarification",
-                                 "choice_resolution", "choice_confirmation"):
+                                 "choice_resolution", "choice_acknowledgement", "choice_confirmation"):
             flag("invalid_simultaneous_requests", i, "unknown interaction type")
         if t.interaction == "choice_setup":
             options = t.choice_options
@@ -148,10 +217,22 @@ def audit(d: Dialogue, required: list[str] | None = None) -> dict:
                     or t.responds_to != [i - 2, i - 1] or i + 2 >= len(d.turns)
                     or d.turns[i + 1].interaction != "choice_resolution"
                     or d.turns[i + 1].responds_to != [i]
-                    or d.turns[i + 1].speaker not in (d.turns[i - 2].speaker, d.turns[i - 1].speaker)
-                    or d.turns[i + 2].interaction != "choice_confirmation"
-                    or d.turns[i + 2].speaker != "assistant" or d.turns[i + 2].responds_to != [i + 1]):
+                    or d.turns[i + 1].speaker not in (d.turns[i - 2].speaker, d.turns[i - 1].speaker)):
                 flag("missing_conflict_clarification", i, "clarification must respond to both requests")
+            elif d.turns[i + 2].interaction == "choice_acknowledgement":
+                acknowledgement = d.turns[i + 2]
+                other = next((d.turns[j].speaker for j in (i-2, i-1)
+                              if d.turns[j].speaker != d.turns[i+1].speaker), None)
+                if (i + 3 >= len(d.turns) or acknowledgement.speaker != other
+                        or acknowledgement.responds_to != [i+1]
+                        or acknowledgement.choice_outcome not in ("agreement", "open")
+                        or d.turns[i+3].interaction != "choice_confirmation"
+                        or d.turns[i+3].choice_outcome != acknowledgement.choice_outcome
+                        or d.turns[i+3].speaker != "assistant" or d.turns[i+3].responds_to != [i+1, i+2]):
+                    flag("missing_conflict_clarification", i, "both participants must be acknowledged")
+            elif (d.turns[i+2].interaction != "choice_confirmation" or d.turns[i+2].speaker != "assistant"
+                  or d.turns[i+2].responds_to != [i+1]):
+                flag("missing_conflict_clarification", i, "clarification needs a response")
         if t.interaction == "choice_resolution":
             if type(t.choice_index) is not int or t.choice_index not in (0, 1):
                 flag("invalid_simultaneous_requests", i, "resolution must select one of the two options")
@@ -164,8 +245,12 @@ def audit(d: Dialogue, required: list[str] | None = None) -> dict:
                                      "detail": "cannot verify the selected option from explicit ordinal wording"})
         if t.interaction == "choice_confirmation":
             addresses = t.addressee if isinstance(t.addressee, list) else [t.addressee]
-            if (i == 0 or d.turns[i-1].interaction != "choice_resolution"
-                    or not ({d.turns[i-1].speaker, "all"} & set(addresses))):
+            if i and d.turns[i-1].interaction == "choice_acknowledgement":
+                if (i < 2 or d.turns[i-2].interaction != "choice_resolution" or "all" not in addresses
+                        or t.choice_outcome != d.turns[i-1].choice_outcome or t.responds_to != [i-2, i-1]):
+                    flag("invalid_simultaneous_requests", i, "confirmation must reflect both participants")
+            elif (i == 0 or d.turns[i-1].interaction != "choice_resolution"
+                  or not ({d.turns[i-1].speaker, "all"} & set(addresses))):
                 flag("invalid_simultaneous_requests", i, "confirmation must address the deciding user or everyone")
         addr = t.addressee if isinstance(t.addressee, list) else [t.addressee]
         if not addr or any(a not in valid | {"third_party", "all", "none"} for a in addr):
@@ -179,6 +264,9 @@ def audit(d: Dialogue, required: list[str] | None = None) -> dict:
             flag("spoken_internal_metadata",i,t.text)
         if t.speaker == "assistant" and unsupported_assistant_action(t.text):
             flag("unsupported_assistant_action", i, t.text)
+        if t.speaker == "assistant" and numeric_safety_advice_needs_review(t.text):
+            warnings.append({"code": "numeric_safety_advice_review", "turn_id": i,
+                             "detail": "check whether the quantitative advice is supported by the context"})
         if t.kind == "backchannel":
             counts["backchannel"] += 1
             if host is None:
@@ -269,6 +357,12 @@ def audit(d: Dialogue, required: list[str] | None = None) -> dict:
                     flag("invalid_simultaneous_requests", i, "both requests need a shared preceding assistant turn")
                 else:
                     first = d.turns[other]
+                    if d.profile.get("strict_choice_consistency"):
+                        options = d.turns[other-1].choice_options
+                        language = "en" if english else "zh"
+                        if any(prior_preference_conflict(d.turns, request.speaker, other, options,
+                                                         request.choice_index, language) for request in (first, t)):
+                            flag("choice_preference_conflict", i, "explicit prior preference contradicts the selected option")
                     if first.text.strip().casefold() == t.text.strip().casefold():
                         flag("invalid_simultaneous_requests", i, "different choices cannot have identical text")
                     for request in (first, t):

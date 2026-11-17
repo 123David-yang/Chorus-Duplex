@@ -146,11 +146,11 @@ def voices_for_dialogue(dialogue_id: str, n_users: int) -> dict[str, str]:
         if os.environ.get("KOKORO_VOICE_POOL"):
             pool=[f"kokoro_{int(v):03d}" for v in os.environ["KOKORO_VOICE_POOL"].split(",")]
             if len(set(pool))!=len(pool) or any(not 3<=int(v.split("_")[1])<=102 or v=="kokoro_058" for v in pool):raise ValueError("Invalid calibrated Kokoro voice pool")
-            if len(pool)<n_users+1:raise ValueError("Calibrated voice pool too small for users plus third party")
+            if len(pool)<n_users:raise ValueError("Calibrated voice pool too small for users")
         rng.shuffle(pool)
         mapping={"assistant":"kokoro_058"}
         for i in range(n_users):mapping[f"user_{i+1:02d}"]=pool[i]
-        remaining=pool[n_users:]
+        remaining=pool[n_users:] or pool
         for i in range(6):mapping[f"third_party_{i+1:02d}"]=remaining[i%len(remaining)]
         return mapping
     extra = reference_voices()
@@ -166,7 +166,7 @@ def voices_for_dialogue(dialogue_id: str, n_users: int) -> dict[str, str]:
         if os.environ.get("MOSS_VOICE_POOL"):
             pool=[v.strip() for v in os.environ["MOSS_VOICE_POOL"].split(",") if v.strip()]
             if len(set(pool))!=len(pool) or any(v not in _USER_POOL and v not in extra for v in pool):raise ValueError("Invalid calibrated MOSS voice pool")
-            if len(pool)<n_users+1:raise ValueError("MOSS voice pool needs distinct users and third party")
+            if len(pool)<n_users:raise ValueError("MOSS voice pool needs enough distinct users")
     rng.shuffle(pool)
     out = {"assistant": assistant}
     for i in range(n_users):

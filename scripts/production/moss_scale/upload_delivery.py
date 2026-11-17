@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import io
 import json
 import logging
@@ -15,6 +16,8 @@ import math
 import os
 import re
 import sys
+import urllib.error
+import warnings
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -78,7 +81,8 @@ def _assert_public_safe(value):
 
 
 
-def validate_delivery(root: Path, ident: str, max_bytes: int = MAX_BATCH_BYTES) -> tuple[dict, dict[str, bytes]]:
+def validate_delivery(root: Path, ident: str, max_bytes: int = MAX_BATCH_BYTES,
+                      expected_receipt_sha256: str | None = None) -> tuple[dict, dict[str, bytes]]:
     import soundfile as sf
     from scripts.text.quality import audit
     from scripts.text.utils.schema import Dialogue
@@ -90,7 +94,10 @@ def validate_delivery(root: Path, ident: str, max_bytes: int = MAX_BATCH_BYTES) 
     receipt_path = (receipt_dir / f"{ident}.json").resolve()
     if not receipt_dir.is_relative_to(root) or receipt_path.parent != receipt_dir:
         raise ValueError("Receipt outside delivery root")
-    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt_bytes = receipt_path.read_bytes()
+    if expected_receipt_sha256 is not None and hashlib.sha256(receipt_bytes).hexdigest() != expected_receipt_sha256:
+        raise ValueError("Receipt changed before upload validation")
+    receipt = json.loads(receipt_bytes)
     annotation = receipt["annotation"]
     if annotation["dialogue_id"] != ident:
         raise ValueError("Receipt dialogue ID mismatch")
@@ -123,12 +130,35 @@ def validate_delivery(root: Path, ident: str, max_bytes: int = MAX_BATCH_BYTES) 
     if type(frames) is not int or type(sample_rate) is not int or frames <= 0 or sample_rate != 48000:
         raise ValueError("Invalid frame count or sample rate")
     for name in names[:2]:
-        info = sf.info(io.BytesIO(paths[f"audio/{name}"]))
-        if (info.frames, info.samplerate, info.channels) != (frames, sample_rate, 2):
-            raise ValueError("Clean/noisy audio format differs from the receipt")
+        try:
+            with sf.SoundFile(io.BytesIO(paths[f"audio/{name}"])) as audio:
+                if (audio.frames, audio.samplerate, audio.channels) != (frames, sample_rate, 2):
+                    raise ValueError("Clean/noisy audio format differs from the receipt")
+                decoded = 0
+                while decoded < frames:
+                    block = audio.read(min(65536, frames - decoded), dtype="float32", always_2d=True)
+                    if not len(block):
+                        break
+                    decoded += len(block)
+                if decoded != frames:
+                    raise ValueError("Clean/noisy audio ends before its claimed length")
+        except RuntimeError:
+            raise ValueError("Clean/noisy audio cannot be fully decoded") from None
     timeline = json.loads(paths[f"audio/{names[2]}"])
     _assert_public_safe(timeline)
     turns = annotation["turns"]
+    credited = receipt.get("credited_seconds")
+    if (isinstance(credited, bool) or not isinstance(credited, (int, float)) or not math.isfinite(credited)
+            or not 0 < credited <= frames / sample_rate + .001 or not turns):
+        raise ValueError("Invalid credited duration")
+    pauses = [turn.get("pause_ms", 0) or 0 for turn in turns]
+    first_gap = turns[0].get("gap_before_ms", 0)
+    if (any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0
+            for value in pauses + [first_gap])):
+        raise ValueError("Invalid pause or initial gap")
+    expected = frames / sample_rate - sum(pauses) / 1000 - first_gap / 1000
+    if abs(credited - expected) > .01:
+        raise ValueError("Credited duration disagrees with audio and pauses")
     if len(timeline) != len(turns):
         raise ValueError("Timeline turn count differs from annotation")
     for index, (item, turn) in enumerate(zip(timeline, turns)):
@@ -144,35 +174,27 @@ def validate_delivery(root: Path, ident: str, max_bytes: int = MAX_BATCH_BYTES) 
 
 
 def _hf_token():
-    """Reuse the project's credential order without printing credentials."""
-    from huggingface_hub import get_token
-    from scripts.config import load_env
-
-    load_env()
-    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-    candidates = (Path.home() / "Desktop" / "pass-word" / "hf_token.txt",
-                  Path.home() / "Desktop" / "hf_token.txt")
-    for path in candidates:
-        if not token and path.is_file():
-            token = path.read_text(encoding="utf-8-sig").strip()
-    token = token or get_token()
-    if not token:
-        raise RuntimeError("No authorized Hugging Face credential is available")
-    return token
+    """Reuse the project's credential resolver without printing credentials."""
+    from scripts.production.publishing.credentials import hf_token
+    return hf_token()
 
 
-def _publish(root: Path, repo: str, ids: list[str], execute: bool = False) -> dict:
+def _publish(root: Path, repo: str, ids: list[str], execute: bool = False,
+             expected_receipt_hashes: dict[str, str] | None = None) -> dict:
     from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
         raise ValueError("Invalid HF dataset repo")
     if not ids or len(ids) != len(set(ids)):
         raise ValueError("Supply unique explicit sample IDs")
+    if expected_receipt_hashes is not None and set(expected_receipt_hashes) != set(ids):
+        raise ValueError("Receipt hashes must match the requested IDs")
     artifacts: dict[str, bytes] = {}
     annotations = []
     remaining = MAX_BATCH_BYTES
     for ident in ids:
-        annotation, files = validate_delivery(root, ident, remaining)
+        expected = expected_receipt_hashes[ident] if expected_receipt_hashes is not None else None
+        annotation, files = validate_delivery(root, ident, remaining, expected)
         annotations.append(annotation)
         artifacts.update(files)
         remaining -= sum(map(len, files.values()))
@@ -182,9 +204,13 @@ def _publish(root: Path, repo: str, ids: list[str], execute: bool = False) -> di
     token = _hf_token()
     api = HfApi(token=token)
     head = api.repo_info(repo, repo_type="dataset").sha
-    index_path = Path(hf_hub_download(repo, "annotations.jsonl", repo_type="dataset",
-                                     revision=head, token=token))
-    original = index_path.read_bytes()
+    index_info = api.get_paths_info(repo, ["annotations.jsonl"], revision=head, repo_type="dataset")
+    if index_info:
+        index_path = Path(hf_hub_download(repo, "annotations.jsonl", repo_type="dataset",
+                                         revision=head, token=token))
+        original = index_path.read_bytes()
+    else:
+        original = b""  # An initialized dataset may not have an annotation index yet.
     existing = {}
     for line in original.splitlines():
         row = json.loads(line)
@@ -229,16 +255,28 @@ def _publish(root: Path, repo: str, ids: list[str], execute: bool = False) -> di
 
 
 
-def publish(root: Path, repo: str, ids: list[str], execute: bool = False) -> dict:
+def publish(root: Path, repo: str, ids: list[str], execute: bool = False,
+            expected_receipt_hashes: dict[str, str] | None = None) -> dict:
     """Publish via a sanitized boundary, including when called from Python."""
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     previous_disable = logging.root.manager.disable
     logging.disable(logging.CRITICAL)
     try:
-        return _publish(root, repo, ids, execute)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return _publish(root, repo, ids, execute, expected_receipt_hashes)
     except Exception as exc:
         status = getattr(getattr(exc, "response", None), "status_code", None)
         suffix = f", HTTP {status}" if isinstance(status, int) else ""
+        transient = isinstance(exc, (ConnectionError, TimeoutError, http.client.IncompleteRead, urllib.error.URLError))
+        try:
+            import httpx
+            transient = transient or isinstance(exc, httpx.TransportError)
+        except ImportError:
+            pass
+        transient = transient or isinstance(status, int) and (status in (408, 409, 425, 429) or status >= 500)
+        if transient:
+            suffix += ", retryable"
         raise RuntimeError(f"Publication failed ({type(exc).__name__}{suffix})") from None
     finally:
         logging.disable(previous_disable)

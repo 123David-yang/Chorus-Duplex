@@ -1,6 +1,6 @@
 # Chorus-Duplex（和声·双工）· 中英文多人全双工语音对话
 
-[![GitHub](https://img.shields.io/badge/GitHub-Chorus-Duplex-181717?logo=github&logoColor=white)](https://github.com/123David-yang/Chorus-Duplex) [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Dataset-FFD21E?logo=huggingface&logoColor=FFD21E)](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex)
+[![GitHub](https://img.shields.io/badge/GitHub-Chorus--Duplex-181717?logo=github&logoColor=white)](https://github.com/123David-yang/Chorus-Duplex) [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Dataset-FFD21E?logo=huggingface&logoColor=FFD21E)](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex)
 
 [English](README.md) · **简体中文** · [数据集与音频试听](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex)
 
@@ -32,7 +32,7 @@ Chorus-Duplex 构建多位说话人与语音助手共同参与的中英文合成
 | 连续附和 | 同一用户或不同用户先后开口，下一句等上一句说完。 |
 | 打断 `interruption` | 一位说话人在对方话轮结束前抢话，回应已听到的内容。 |
 | 多人同时打断 | 两位用户打断同一话轮。 |
-| 同时提出不同选择 | 多人同时表达不同选项；助手听完后请求澄清。 |
+| 同时表达不同偏好 | 多人同时表达不同选择；助手听完后请求澄清。后续可达成一致，也可先保留分歧继续比较。 |
 | 附和转打断 | 用户先短暂附和，助手继续说。用户转到「不过」「但是」或「等一下」时，助手停止。再次打断助手的新话轮，另记一个事件。 |
 | 第三方插话 `side_talk` | 第三方短暂参与插曲，随后恢复主线。第三方话轮单独标注。 |
 
@@ -59,9 +59,9 @@ Chorus-Duplex 构建多位说话人与语音助手共同参与的中英文合成
 
 ## 剧本如何产生多样性
 
-对话索引在 15 个话题领域中轮换。带种子的抽样改变用户人数（1–6 人）、关系、场景、目标轮数和人声音色。剧本模型创作具体情节、人设和表达。助手跨对话固定使用同一个 MOSS 音色，可用参考录音扩展人类说话人的音色。内置人声音色有五种。六位用户和一位第三方需要各有不同音色时，请额外提供至少两个不同的参考人声音色。
+对话索引在 15 个中文或 12 个英文话题领域中轮换。带种子的抽样改变用户人数（1–6 人）、关系、场景、目标轮数和人声音色。剧本模型创作具体情节、人设和表达。助手跨对话固定使用同一个 MOSS 音色，可用参考录音扩展人类说话人的音色。内置人声音色有五种。生产规划会按不同的预设或参考录音配置限制人数；不同录音不一定对应听感不同的说话人。如需六位用户加一位第三方，请至少补充两个合适的参考人声音色。
 
-未完成、附和、打断、第三方插话独立抽样，计划概率依次为 40%、60%、27%、25%，首条使用预设场景。人数足够时再抽多人互动。提示词只加入选中事件的规则，生成后校验结构和引用。这里的概率用于规划剧本，剧本和音频筛选会改变最终分布。
+规划器初始抽样未完成、附和、打断、第三方插话的概率依次为 70%、95%、66%、55%，通常至少选择三种事件；首条及可用音色情况有特殊处理。多人互动需要足够的参与者。这些是规划概率，最终数据分布还受生成与校验影响。
 
 ## 合成链路与交付格式
 
@@ -101,7 +101,7 @@ python -m scripts.sound.tools.download_vad
 python -m scripts.sound.tools.download_background_sample
 ```
 
-这段约五秒的 VOiCES 人声仅用于冒烟测试；正式生产应准备多样且许可合适的背景素材。可用 `DUPLEX_RESOURCES_DIR` 指定模型与缓存的位置。
+这段约五秒的 VOiCES 人声仅用于冒烟测试；正式生产应准备多样的 VOiCES 背景录音。可用 `DUPLEX_RESOURCES_DIR` 指定模型与缓存的位置。
 
 把 [`.env.example`](.env.example) 复制为 `.env`。Windows PowerShell 用 `Copy-Item .env.example .env`，macOS 或 Linux 用 `cp .env.example .env`。然后填写本地配置。
 
@@ -110,7 +110,7 @@ python -m scripts.sound.tools.download_background_sample
 | `LLM_BASE_URL`、`LLM_MODEL`、`LLM_API_KEY` | Chat Completions API 基础地址、模型名和密钥。客户端会拼接 `/chat/completions`。 |
 | `MOSS_DIR`、`MOSS_MODEL_DIR` | 可选：分别覆盖仓库内运行时与下载的模型目录。 |
 | `VAD_MODEL` | 兼容的 [Silero VAD](https://github.com/snakers4/silero-vad) ONNX 文件。 |
-| `BG_SOURCE_DIR` | [VOiCES](https://registry.opendata.aws/lab41-voices/) 素材根目录，素材放在 `rm*/babb/*.wav`。 |
+| `BG_SOURCE_DIR` | [VOiCES](https://registry.opendata.aws/lab41-sri-voices/) 素材根目录，素材放在 `rm*/babb/*.wav`。 |
 | `VOICE_MANIFEST` | 可选音色参考清单。格式为 `schema_version: 1` 和 `voices` 数组，每项包含 `id`、`gender`、`reference_audio`、`source_url`、`license` 和 `sha256`。相对 WAV 路径以清单所在目录为基准。 |
 
 ```bash
@@ -119,11 +119,29 @@ python -m scripts.production.scale_moss --check
 python -m scripts.production.scale_moss --root output/moss --hours 0.05
 ```
 
-GPU 环境使用 `requirements-moss-gpu.txt`，不要与 CPU 依赖文件混装。已在 AutoDL Linux 实例验证 CUDA 推理，但尚未验证仅凭该依赖文件从零安装。`--check` 不创建 CUDA session，首次使用请先运行一条小样。
+GPU 环境使用 `requirements-moss-gpu.txt`，不要与 CPU 依赖文件混装。已在预装 CUDA/cuDNN 的 AutoDL Linux 镜像中新建 Python 3.12 环境，按该文件安装并验证 MOSS CUDA；其他 GPU 环境仍需自行验证。`--check` 不创建 CUDA session，首次使用请先运行一条小样。
 
 生成英文时加 `--language en`；CUDA 环境配置完成后可选择 `--tts-backend moss_onnx --tts-device cuda`。多 TTS 后端、固定助手音色与参考音色见[音色配置说明](scripts/sound/TTS.md)。
 
 `--check` 仅核对本地输入，无需加载模型或调用 API。最后一条命令的目标是至少三分钟有效音频。续跑使用同一个 `--root`，程序按完成记录跳过已交付条目。
+
+## 边生产边上传
+
+先在源码仓库之外准备新的输出目录，并指定有写入权限的数据集。下面是中英文各约三分钟的小规模示例：
+
+```bash
+python -m scripts.production.moss_scale.produce_and_upload --root /path/to/output --repo OWNER/DATASET --hours-zh 0.05 --hours-en 0.05 --tts-device cuda --execute
+```
+
+先在本地配置剧本服务和 Hugging Face 凭据。生产时已完成的干声/背景声配对会分批上传，输出目录保存唯一批次标识和已验证记录，用于续跑；结束时会检查远端数据集修订，配对音频只计一次时长。不加 `--execute` 时仅显示计划。显存和吞吐允许时可选 `--workers 2` 并行两种语言，需先在自己的设备上测试。在对应语言输出目录创建 `STOP` 文件可停止该生产进程。
+
+`BG_SOURCE_DIR` 应指向 VOiCES 背景录音；新标注会记录带背景版本的来源、署名、许可和混音信息。精确干声音频哈希去重仅覆盖本次运行，不代表对整个已有数据集去重。
+
+协调器已通过本地及故障模拟测试；大规模无人值守 GPU 生产和所有网络故障尚未验证。扩量前请抽查有代表性的剧本与音频。
+
+默认情况下，某个生产进程 30 分钟没有新增交付，或单次运行超过 24 小时，协调器会停止；这两项时限均可配置。协调器只能停止自己的进程，不能代替云平台停止计费；无人值守前还需单独配置云端关机或费用限制。
+
+设置 STOP 时已经发出的剧本预取请求无法撤回。协调器会给生产进程短暂的退出时间，然后结束仍在运行的自有进程；续跑时使用同一输出目录。
 
 ## 目录结构
 
@@ -170,7 +188,7 @@ print(timeline[0]["speaker"], timeline[0]["start_sec"], timeline[0]["end_sec"])
 
 数据是中英文合成对话。生成时检查剧本结构、音频时序、TTS 截断和文件格式。当前 CLI 未接入 ASR。已开放的音频、试听和来源详见数据集卡片。[Hugging Face 数据集](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex)
 
-背景素材来自 SRI International / Lab41, In-Q-Tel 的 VOiCES，适用 CC BY 4.0。分发混音时请保留署名。使用音色参考录音时，请确保有相应使用权，并在清单中保留来源和许可。[VOiCES 语料](https://registry.opendata.aws/lab41-voices/)
+背景素材来自 SRI International / Lab41, In-Q-Tel 的 VOiCES，适用 CC BY 4.0。分发混音时请保留署名。使用音色参考录音时，请确保有相应使用权，并在清单中保留来源和许可。[VOiCES 语料](https://registry.opendata.aws/lab41-sri-voices/)
 
 维护者 · David
 

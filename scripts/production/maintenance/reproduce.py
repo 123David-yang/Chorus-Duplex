@@ -6,11 +6,14 @@ from scripts.production.state.lock import ProductionLock
 from scripts.production.synthesis.asr import SenseVoice
 from scripts.production.synthesis.producer import create_production_synth,produce
 from scripts.config import load_env
+from scripts.production.moss_scale.config import resources_root
 from scripts.text.utils.schema import Dialogue
 
 def main():
     p=argparse.ArgumentParser();p.add_argument("--root",default=str(ROOT_DEFAULT));p.add_argument("--ids",nargs="+",required=True);a=p.parse_args()
-    load_env();os.environ.update(TTS_BACKEND="moss_onnx",DUPLEX_PRODUCTION="1",TTS_STRICT="1");os.environ.setdefault("VOICE_MANIFEST",r"D:\DuplexVoice_resources\voices\AISHELL-3\manifest.json")
+    load_env();os.environ.update(TTS_BACKEND="moss_onnx",DUPLEX_PRODUCTION="1",TTS_STRICT="1")
+    manifest=resources_root()/"voices"/"AISHELL-3"/"manifest.json"
+    if manifest.is_file():os.environ.setdefault("VOICE_MANIFEST",str(manifest))
     ledger=Ledger(a.root)
     with ProductionLock(ledger.root):
         asr=SenseVoice();synth=create_production_synth(ledger.root,asr=asr)

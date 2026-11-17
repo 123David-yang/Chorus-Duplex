@@ -67,6 +67,7 @@ class Turn:
     overlap_with: int | None = None
     choice_options: list[str] | None = None
     choice_index: int | None = None
+    choice_outcome: str | None = None
 
 
 @dataclass
@@ -94,7 +95,7 @@ class Dialogue:
             t["turn_id"] = i  # 契约保证：turn_id 恒等于轮序（0 起）
             for key in ("parts", "pause_ms", "resolution", "side_talk_entry",
                         "backchannel_prefix", "backchannel_gap_ms", "interaction", "overlap_with",
-                        "choice_options", "choice_index"):
+                        "choice_options", "choice_index", "choice_outcome"):
                 if t[key] is None:
                     t.pop(key)
         return json.dumps(d, ensure_ascii=False)

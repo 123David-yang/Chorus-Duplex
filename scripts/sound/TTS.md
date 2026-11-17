@@ -5,7 +5,7 @@
 在 Python 3.12 虚拟环境中，CPU 使用 `pip install -r requirements-moss.txt`。
 干净 CPU 环境的端到端测试在 Windows x64 完成；当前固定的 ONNX Runtime 版本没有 Intel macOS 的 CPython 3.12 wheel。
 CUDA 13 / cuDNN 9 环境使用 `requirements-moss-gpu.txt`，不要在同一环境同时安装 CPU 和 GPU 两种 ONNX Runtime。
-Linux GPU 实例已测试 MOSS 推理，但尚未验证仅凭该 GPU 依赖清单从零安装。
+已在 AutoDL CUDA 13 Linux 镜像中新建 Python 3.12 venv，按 GPU 依赖清单安装并验证 MOSS 中英文推理；该测试依赖镜像中的 CUDA/cuDNN 系统库，不代表其他 GPU 环境已验证。
 CUDA/cuDNN 动态库必须与所选 ONNX Runtime 兼容；必要时参考
 [ONNX Runtime 官方安装说明](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html)。
 

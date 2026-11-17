@@ -108,8 +108,9 @@ def main():
         parser.error("Choose a separate destination for validated replacements.")
     load_env()
     os.environ.update(TTS_BACKEND="moss_onnx", TTS_STRICT="1")
-    os.environ.setdefault("MOSS_DIR", "D:/Project_Vibe/moss-tts-official")
-    os.environ.setdefault("VOICE_MANIFEST", str(RESOURCES / "voices/AISHELL-3/manifest.json"))
+    manifest = RESOURCES / "voices/AISHELL-3/manifest.json"
+    if manifest.is_file():
+        os.environ.setdefault("VOICE_MANIFEST", str(manifest))
     for folder in ("audio", "completed", "staging"):
         (args.destination / folder).mkdir(parents=True, exist_ok=True)
     synth = FastSynth(args.destination / "staging")

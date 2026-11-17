@@ -164,7 +164,7 @@ def render(d, synth, clean, timeline_path):
         placed.append((speaker,start,wave))
         if t.get("interaction"):
             timing["interaction"] = t["interaction"]
-        for key in ("choice_options", "choice_index"):
+        for key in ("choice_options", "choice_index", "choice_outcome"):
             if t.get(key) is not None:
                 timing[key] = t[key]
         timeline.append({k:t[k] for k in ("turn_id","speaker","kind","addressee","text")} |

@@ -41,8 +41,8 @@ TRANSITION_PIVOTS = tuple(sorted(
 ))
 EN_TRANSITION_PIVOTS = ("But", "Wait", "Hold on", "Hang on", "Actually", "One second", "Let me jump in")
 from scripts.text.simultaneous_choices import (
-    CHOICE_CONFIRMATIONS, CHOICE_RESOLUTIONS, CONFLICTING_CHOICES, CONFLICT_CLARIFICATIONS,
-    choice_option_sets, choice_request_texts, choice_setup_texts,
+    CHOICE_ACKNOWLEDGEMENTS, JOINT_CONFIRMATIONS, PERSONAL_RESOLUTIONS, CONFLICTING_CHOICES, CONFLICT_CLARIFICATIONS,
+    generation_choice_option_sets, generation_choice_request_texts, choice_request_texts, choice_setup_texts,
 )
 
 
@@ -69,10 +69,14 @@ def plan_slots(users, events, group, repeat, group_interrupt, transition, handof
         return len(slots) - 1
 
     first = users[0]
-    opening = add(first, "assistant", cue="用具体问题引入主线。")
-    add("assistant", first, refs=[opening], cue="给出有针对性的初步回应。")
+    choice_planned = "simultaneous_requests" in events
+    opening = add(first, "assistant", cue=("介绍相关背景或实际条件，暂不重复二选一问题。"
+                                          if choice_planned else "用具体问题引入主线。"))
+    add("assistant", first, refs=[opening], cue=("回应背景并了解需求或限制，不提前宣布方案。"
+                                                  if choice_planned else "给出有针对性的初步回应。"))
     for speaker in users[1:]:
-        add(speaker, "all", refs=[opening], cue="自然补充自己的实际情况。")
+        add(speaker, "all", refs=[opening], cue=("自然补充实际约束，暂不表明二选一偏好。"
+                                                 if choice_planned else "自然补充自己的实际情况。"))
     order = list(events)
     rng.shuffle(order)
     for event in order:
@@ -98,14 +102,14 @@ def plan_slots(users, events, group, repeat, group_interrupt, transition, handof
                 start = add(listener, "third_party_01", cue="突然有门外或身边的第三方，转向对方说一句具体的事。")
                 aside = add("third_party_01", listener, "side_talk", [start], "第三方回一句，本轮独立于主话题。")
             add(listener, "third_party_01", refs=[aside], cue="短暂回应第三方。")
-            resume = add(listener, "assistant", refs=[opening], cue="明确把对话接回开头的主话题。")
+            resume = add(listener, "assistant", refs=[opening], cue="自然接回插话前尚未处理的具体细节，不要完整重复开场问题或机械说‘回到刚才’。")
             add("assistant", listener, refs=[resume], cue="继续主线。")
         elif event == "incomplete":
             fillers = ("uh", "um", "let me think", "give me a second") if language == "en" else HESITATION_FILLERS
             filler = rng.choice(fillers) if rng.random() < .8 else None
             vocal_cue = (
                 f"在停顿前实际说出一次‘{filler}’，放在没说完的内容之后，并用省略号收尾。"
-                if filler else "用实际说到一半的内容表现卡住。"
+                if filler else "用实际说到一半的内容表现卡住，并以省略号或破折号收尾。"
             )
             if handoff:
                 host = add(listener, "assistant", "incomplete", [len(slots)-1],
@@ -115,7 +119,7 @@ def plan_slots(users, events, group, repeat, group_interrupt, transition, handof
                 add(listener, "all", "incomplete", [len(slots)-1], rng.choice(RESUME_CUES)+vocal_cue, "resume")
         elif event == "simultaneous_requests":
             first, second = rng.sample(users, 2)
-            options = list(rng.choice(choice_option_sets(language, topic)))
+            options = list(rng.choice(generation_choice_option_sets(language, topic)))
             if slots[-1]["speaker"] != "assistant" and slots[-1]["kind"] != "backchannel":
                 last = len(slots)-1
                 add("assistant", slots[last]["speaker"], refs=[last],
@@ -123,7 +127,7 @@ def plan_slots(users, events, group, repeat, group_interrupt, transition, handof
             request = add(first, "assistant", refs=[len(slots)-1],
                           cue="请助手帮助两人分析前文讨论过的选择。")
             slots[request].update(interaction="choice_request", choice_options=options,
-                                  fixed_text=rng.choice(choice_request_texts(language, options)))
+                                  fixed_text=rng.choice(generation_choice_request_texts(language, options)))
             setup = add("assistant", "all", refs=[request],
                         cue="基于当前主话题明确提出两个互斥的具体方案，请大家选一个。")
             slots[setup].update(interaction="choice_setup", choice_options=options,
@@ -148,11 +152,17 @@ def plan_slots(users, events, group, repeat, group_interrupt, transition, handof
             resolution = add(responder, "assistant", refs=[reply],
                              cue="回应助手的澄清，明确选择之前提出的一个方案。")
             slots[resolution].update(interaction="choice_resolution", choice_index=selected,
-                                     fixed_text=rng.choice(CHOICE_RESOLUTIONS[language][selected]))
-            confirmation = add("assistant", slots[resolution]["speaker"], refs=[resolution],
-                               cue="确认用户选项，并继续基于该选项提供建议，不要声称自己执行现实操作。")
-            slots[confirmation].update(interaction="choice_confirmation",
-                                       fixed_text=rng.choice(CHOICE_CONFIRMATIONS[language]))
+                                     fixed_text=rng.choice(PERSONAL_RESOLUTIONS[language][selected]))
+            other = second if responder == first else first
+            outcome = rng.choice(("agreement", "open"))
+            acknowledgment = add(other, responder, refs=[resolution],
+                                 cue="回应另一位的选择；同意先尝试或保留不同意见、先比较两种方案。")
+            slots[acknowledgment].update(interaction="choice_acknowledgement", choice_outcome=outcome,
+                                         fixed_text=rng.choice(CHOICE_ACKNOWLEDGEMENTS[language][outcome]))
+            confirmation = add("assistant", "all", refs=[resolution, acknowledgment],
+                               cue="按两人的实际态度继续，未达成一致时不要宣布已共同决定。")
+            slots[confirmation].update(interaction="choice_confirmation", choice_outcome=outcome,
+                                       fixed_text=rng.choice(JOINT_CONFIRMATIONS[language][outcome]))
         elif event == "interruption":
             host = add("assistant", "all", refs=[len(slots)-1],
                        cue="先说完一项事实，再开始下一个分句，但第二个分句在半句时被用户截断。")
@@ -190,14 +200,25 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
         "为给定结构写自然的中文多人会话。只返回 JSON 对象，键为 turn 的字符串编号，"
         "普通轮值是台词字符串；标了 form=anchor、resume 或 transition 的轮，值为两个非空台词字符串组成的数组。"
         "anchor 的第一段必须是可被后续附和的完整信息，第二段至少十字。"
-        "resume 第一段要听得出卡住，句尾用……或——，可按语境用‘那个’等短填充词。第二段须接回这一处，补全、找词后说出细节或改口。"
+        "resume 第一段要听得出卡住，句尾用……或——，可按语境用‘那个’等短填充词。第二段须接回这一处，补全、找词后说出细节或改口，不要再重复第一段末尾的同一个填充短句。"
+        "未完成或接话前必须有具体没说完的内容，不能只说‘我想一下’或‘嗯’。"
+        "form=handoff 的台词也必须在没说完的位置以省略号或破折号收尾。"
         "不要在普通逗号、已经完整的陈述后机械切开，不要在停顿后另起不相关的问题。"
         "自然例子：[‘我能赶上的最晚一班是……’,‘哦对，七点四十那班。’]。"
         "transition 第一段只写短附和，第二段用该轮指定的开场词，转折词只说一次。"
         "带 fixed_text 的轮次必须逐字使用给定台词，不能改变这些选项。"
         "不要读角色编号。关系设定只适用于人类角色，助手是语音助手。向助手说话时不要使用亲属称呼。"
         "助手只提供建议，不声称亲历、在场、已查询实时信息、替用户操作或发群消息。保持同一话题，对已经说出的信息作回应。"
-        "事实性建议应符合已知条件；不确定时说明条件或保持审慎，避免保证收益、安全或其他无法确认的结果。"
+        "助手没有定时提醒能力，不声称之后会主动提醒。"
+        "事实性建议只依据已知条件；不确定时先提出需核实的条件，不保证收益、安全或其他结果。"
+        "不要凭色温判断亮度或阅读效果，不要预设房屋接线改动容易；不要把某种食物当作缓解症状的通用办法，宠物健康建议应以兽医要求和具体情况为准。"
+        "设备型号和说明书未知时，不得编造具体的容量、尺寸、转速或安全阈值。"
+        "食品、过敏与健康建议要承接已知限制；缺少食材、设备或数量信息时，不要编造具体烹饪时长、批次或熟透保证。"
+        "区分无添加糖和总糖、碳水；各人的限制不能换到别人身上。设备兼容先确认接口，别默认一定能用。"
+        "卖家政策、退货期限和保修条件未知时，请先核实，不能猜具体天数；检查刀具或设备时不要建议直接用手接触刀刃。"
+        "后续话轮推进尚未解决的事情，不要反复重新确定已明确的日期或安排。打断必须增加新的限制或纠正，而不是重复助手刚说过的内容。"
+        "答应比较或解释时要实际推进，没空间展开就不要作该承诺；勿将需要加工的操作说成无需烹饪。"
+        "有人询问是否所有人都同意时，助手不能替尚未回应的人表态；应请他们自己确认。"
         "示例：{\"0\":\"明天几点出发？\",\"1\":[\"第一班车七点开\",\"我们最好提前二十分钟到站。\"]}。"
     )
     if language == "en":
@@ -205,11 +226,20 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
             "LANGUAGE OVERRIDE: Write every spoken line in natural conversational English. "
             "The Chinese cues describe the scene and timing only. Use English punctuation. "
             "The assistant gives suggestions only: never say it will buy, book, call, send messages, "
-            "or create and share documents. It may ask a person to do those things. "
-            "Make factual advice conditional on what is known; avoid unsupported guarantees. "
+            "remind people later, or create and share documents. It may ask a person to do those things. "
+            "Make factual advice conditional on what is known; avoid unsupported guarantees or assuming facts about health, wiring or weather. "
+            "Do not invent device-specific capacity, size, speed, or safety thresholds. "
+            "Keep known allergies in view; don't invent cooking time or batch counts when food, equipment or quantity are unknown. "
+            "Don't guess store return windows or warranties; suggest checking the seller's actual terms. Don't suggest touching blades. "
+            "Move the conversation forward instead of reopening settled dates, and make interruptions add a genuinely new constraint. "
+            "When asked whether everyone agrees, do not speak for people who have not responded; invite them to confirm. "
             "Keep acknowledgements to one to six words. A transition starts with a short "
             "acknowledgement and puts the requested English pivot only in the second part. "
             "For a hesitation, make the first clause sound plausible if the listener stops hearing it midway. "
+            "Include an unfinished thought before the filler; a filler alone is not an incomplete sentence. "
+            "Keep each person's restrictions attached to that person; distinguish added sugar from total sugar or carbohydrates, "
+            "and check device connectors before assuming compatibility. Don't call toasting no preparation. "
+            "If the assistant promises an explanation, follow through instead of repeating the plan. "
             "Separate the requested filler from that clause with a comma, ellipsis, or em dash, "
             "and end the unfinished part with an ellipsis or em dash. Treat a multiword filler as a spoken aside. "
             "Example resume: [\"I'll grab the… give me a second…\", \"Right, the packing list.\"]. "
@@ -237,6 +267,10 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
             request["倾向说明"] = (
                 "这些是作者的角色设定，前后不得无故写成相反倾向。"
                 "其他角色和助手不能在该用户实际说出倾向之前知道它。"
+                "在固定的 choice_request 之前，只铺垫背景、约束或需要比较的因素；"
+                "不要提前完整重复那道二选一问题，也不要逐一问出或宣布两人的选择。"
+                "参与同时选择的两位用户在此之前只陈述条件，不提前表明选哪个；若角色后来改变偏好，必须说出改变原因。"
+                "choice_outcome=open 表示保留分歧，后续不要擅自说所有人已经同意；agreement 只说明参与这次讨论的两人达成暂时一致。"
             )
         two_part_turns = [i for i, turn in turns.items() if turn.get("form") in {"anchor", "resume", "transition"}]
         if two_part_turns:

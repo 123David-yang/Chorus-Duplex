@@ -11,6 +11,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+
+def default_resources_root() -> Path:
+    return Path("D:/DuplexVoice_resources") if os.name == "nt" and Path("D:/").is_dir() else ROOT / "resources"
+
 # 数据链路目录（与 run.py 的 stage 一一对应）
 OUTPUT_DIR = ROOT / "output"
 ANNOTATIONS_DIR = ROOT / "data" / "annotations"   # ① text  产物
@@ -28,7 +32,7 @@ def resolve_background_root() -> Path:
     for legacy in (local, ROOT / "data" / "voices_babble"):
         if legacy.is_dir():
             return legacy
-    resources = Path(os.environ.get("DUPLEX_RESOURCES_DIR", "D:/DuplexVoice_resources" if os.name == "nt" else str(ROOT / "resources")))
+    resources = Path(os.environ.get("DUPLEX_RESOURCES_DIR", str(default_resources_root())))
     return resources / "background" / "voices_babble"
 
 
@@ -51,7 +55,7 @@ def resolve_vad_model() -> Path:
     explicit = os.environ.get("VAD_MODEL")
     if explicit:
         return Path(explicit).expanduser()
-    resources = Path(os.environ.get("DUPLEX_RESOURCES_DIR", "D:/DuplexVoice_resources" if os.name == "nt" else str(ROOT / "resources"))).expanduser()
+    resources = Path(os.environ.get("DUPLEX_RESOURCES_DIR", str(default_resources_root()))).expanduser()
     pinned = resources / "models" / "silero_vad_v512.onnx"
     return pinned if pinned.is_file() or not _legacy_vad.is_file() else _legacy_vad
 

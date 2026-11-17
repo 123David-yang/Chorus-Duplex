@@ -50,6 +50,25 @@ class VoiceRegistryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "not registered"):
                 voices.reference_for_voice("unknown")
 
+    def test_production_cast_uses_distinct_registered_voices(self):
+        from scripts.production.moss_scale.script import distinct_voice_cast
+        with patch.dict(os.environ, {"VOICE_REGISTRY": str(self.registry), "TTS_BACKEND": "moss_onnx"}, clear=True):
+            count, mapping, third = distinct_voice_cast("case", 6, True)
+            self.assertEqual(count, 1)
+            self.assertTrue(third)
+            self.assertEqual(mapping["assistant"], "assistant")
+            self.assertEqual(len(set(mapping.values())), len(mapping))
+            self.assertEqual(set(mapping.values()), {"assistant", "speaker_one", "speaker_two"})
+
+    def test_single_participant_voice_works_without_third_party(self):
+        from scripts.production.moss_scale.script import distinct_voice_cast
+        with patch.dict(os.environ, {"MOSS_VOICE_POOL": "Zhiming", "TTS_BACKEND": "moss_onnx"}, clear=True):
+            count, mapping, third = distinct_voice_cast("single", 1, False)
+            self.assertEqual((count, third), (1, False))
+            self.assertEqual(mapping, {"assistant": "Junhao", "user_01": "Zhiming"})
+            count, mapping, third = distinct_voice_cast("single", 1, True)
+            self.assertEqual((count, third), (1, False))
+
     def test_reference_tampering_after_loading_is_rejected(self):
         with patch.dict(os.environ, {"VOICE_REGISTRY": str(self.registry), "TTS_BACKEND": "moss_onnx"}, clear=True):
             voices.reference_for_voice("speaker_two")
@@ -124,6 +143,66 @@ class VoiceRegistryTests(unittest.TestCase):
 
 
 class BackendTests(unittest.TestCase):
+    def test_failed_backend_exception_is_not_written_to_event_logs(self):
+        from scripts.production.moss_scale import runner
+        with TemporaryDirectory() as folder, patch.dict(os.environ, {}, clear=True), \
+             patch.object(runner, "load_env"), patch.object(runner, "check_inputs", return_value=[]), \
+             patch.object(runner, "FastSynth"), patch.object(runner, "recover_deliveries"), \
+             patch.object(runner, "DeliveryIndex") as index, \
+             patch.object(sys, "stdout", new_callable=io.StringIO) as stdout, \
+             patch.object(sys, "argv", ["scale_moss", "--root", folder, "--continuous"]):
+            index.return_value.hours = 0
+            def fail(*args):
+                (Path(folder) / "STOP").touch()
+                raise RuntimeError("signature=private-sentinel")
+            with patch.object(runner, "generate", side_effect=fail):
+                runner.main()
+            log = (Path(folder) / "events.jsonl").read_text(encoding="utf-8")
+            self.assertNotIn("private-sentinel", log)
+            self.assertNotIn("private-sentinel", stdout.getvalue())
+            self.assertEqual(json.loads(log)["code"], "other")
+
+    def test_stop_during_draft_does_not_prefetch_another_paid_request(self):
+        from scripts.production.moss_scale import runner
+        with TemporaryDirectory() as folder, patch.dict(os.environ, {}, clear=True), \
+             patch.object(runner, "load_env"), patch.object(runner, "check_inputs", return_value=[]), \
+             patch.object(runner, "FastSynth"), patch.object(runner, "recover_deliveries"), \
+             patch.object(runner, "DeliveryIndex") as index, \
+             patch.object(runner, "deliver", return_value={"credited_seconds": 1}) as deliver, \
+             patch.object(sys, "argv", ["scale_moss", "--root", folder, "--continuous"]):
+            index.return_value.hours = 0
+            index.return_value.add.return_value = 1 / 3600
+            def stop_during_draft(*args):
+                (Path(folder) / "STOP").touch()
+                return {"dialogue_id": "first"}
+            with patch.object(runner, "generate", side_effect=stop_during_draft) as generate:
+                runner.main()
+            self.assertEqual(generate.call_count, 1)
+            deliver.assert_not_called()
+
+    def test_stop_file_prevents_finite_target_from_starting_synthesis(self):
+        from scripts.production.moss_scale import runner
+        with TemporaryDirectory() as folder, patch.dict(os.environ, {}, clear=True), \
+             patch.object(runner, "load_env"), patch.object(runner, "check_inputs", return_value=[]), \
+             patch.object(runner, "FastSynth") as synth, \
+             patch.object(sys, "argv", ["scale_moss", "--root", folder, "--hours", "1"]):
+            (Path(folder) / "STOP").touch()
+            runner.main()
+            synth.assert_not_called()
+
+    def test_tagged_run_resumes_without_mixing_different_namespaces(self):
+        from scripts.production.moss_scale import runner
+        with TemporaryDirectory() as folder, patch.dict(os.environ, {}, clear=True), patch.object(runner, "load_env"):
+            with patch.object(sys, "argv", ["scale_moss", "--root", folder, "--hours", "0", "--run-tag", "run-a"]):
+                runner.main()
+            with patch.object(sys, "argv", ["scale_moss", "--root", folder, "--hours", "0"]):
+                runner.main()
+            self.assertEqual(os.environ["CHORUS_RUN_TAG"], "run-a")
+            with patch.object(sys, "stderr", new_callable=io.StringIO), \
+                 patch.object(sys, "argv", ["scale_moss", "--root", folder, "--hours", "0", "--run-tag", "run-b"]):
+                with self.assertRaises(SystemExit):
+                    runner.main()
+
     def test_kokoro_model_root_honors_shared_resource_directory_and_override(self):
         from scripts.production.moss_scale.config import kokoro_model_root
         with TemporaryDirectory() as folder:

@@ -1,6 +1,6 @@
 # Chorus-Duplex — Multi-party full-duplex Chinese and English dialogue
 
-[![GitHub](https://img.shields.io/badge/GitHub-Chorus-Duplex-181717?logo=github&logoColor=white)](https://github.com/123David-yang/Chorus-Duplex) [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Dataset-FFD21E?logo=huggingface&logoColor=FFD21E)](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex)
+[![GitHub](https://img.shields.io/badge/GitHub-Chorus--Duplex-181717?logo=github&logoColor=white)](https://github.com/123David-yang/Chorus-Duplex) [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Dataset-FFD21E?logo=huggingface&logoColor=FFD21E)](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex)
 
 **English** · [简体中文](README.zh-CN.md) · [Dataset and audio demos](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex)
 
@@ -32,7 +32,7 @@ These are design targets. They also cover newcomers, turn coordination and groun
 | Sequential backchannels | One or more listeners take turns, each waiting for the previous acknowledgement to end. |
 | Interruption, `interruption` | A speaker takes the floor during an unfinished turn, reacting to something already audible. |
 | Simultaneous interruptions | Two users interrupt the same turn. |
-| Simultaneous conflicting requests | Two people request different choices at once; the assistant waits, then asks for clarification. |
+| Simultaneous conflicting preferences | Two people express different choices at once; the assistant waits and asks for clarification. The pipeline can then model agreement or continued discussion. |
 | Backchannel-to-interruption | A user starts with a brief acknowledgement while the assistant keeps speaking. The assistant stops at a pivot such as “but” or “wait.” Each new interrupted turn counts as a separate event. |
 | Third-party speech, `side_talk` | A third party speaks briefly in a side exchange before the participants return to the main thread. |
 
@@ -59,9 +59,9 @@ These are design targets. They also cover newcomers, turn coordination and groun
 
 ## How the scripts vary
 
-The dialogue index cycles through 15 topic domains. Seeded sampling varies the one to six users, relationships, settings, target turn counts and human voice assignments. The script model writes the particular situation, personas and wording. The assistant has a fixed MOSS voice across dialogues. Optional reference recordings expand the human voice pool. The built-in pool has five human voices. With six users and one third party, supply at least two additional distinct reference voices to avoid reusing a voice.
+The dialogue index cycles through 15 Chinese or 12 English topic domains. Seeded sampling varies the one to six users, relationships, settings, target turn counts and human voice assignments. The script model writes the particular situation, personas and wording. The assistant has a fixed MOSS voice across dialogues. Optional reference recordings expand the human voice pool. The built-in pool has five human voices. The production planner limits the cast to distinct preset or reference bindings; distinct recordings do not guarantee distinct-sounding speakers. Supply at least two additional suitable reference voices to generate six users plus a third party.
 
-The scenario plan samples incomplete turns, backchannels, interruptions and side talk independently at 40%, 60%, 27% and 25%, with a curated first case. Group events require enough participants. The prompt includes the rules for the selected events, and validation checks the required structure and references. These are planning probabilities. Script and audio rejection can change the delivered distribution.
+The planner initially samples incomplete turns, backchannels, interruptions and side talk at 70%, 95%, 66% and 55%. It normally selects at least three event types; the first case and available voices have special handling. Group events require enough participants. These are planning probabilities, not the final data distribution, which also depends on generation and validation.
 
 ## Pipeline and delivery format
 
@@ -101,7 +101,7 @@ python -m scripts.sound.tools.download_vad
 python -m scripts.sound.tools.download_background_sample
 ```
 
-The five-second VOiCES sample is only for a smoke test. Supply a varied licensed background corpus for production. Set `DUPLEX_RESOURCES_DIR` to place models and caches elsewhere.
+The five-second VOiCES sample is only for a smoke test. Use a varied set of VOiCES background recordings for production. Set `DUPLEX_RESOURCES_DIR` to place models and caches elsewhere.
 
 Copy [`.env.example`](.env.example) to `.env`. In Windows PowerShell use `Copy-Item .env.example .env`; on macOS or Linux use `cp .env.example .env`. Fill in the local settings.
 
@@ -110,7 +110,7 @@ Copy [`.env.example`](.env.example) to `.env`. In Windows PowerShell use `Copy-I
 | `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | Chat Completions API base URL, model ID and key. The client appends `/chat/completions`. |
 | `MOSS_DIR`, `MOSS_MODEL_DIR` | Optional overrides for the bundled runtime and downloaded model directory. |
 | `VAD_MODEL` | Path to a compatible [Silero VAD](https://github.com/snakers4/silero-vad) ONNX file. |
-| `BG_SOURCE_DIR` | [VOiCES](https://registry.opendata.aws/lab41-voices/) clips under `rm*/babb/*.wav`. |
+| `BG_SOURCE_DIR` | [VOiCES](https://registry.opendata.aws/lab41-sri-voices/) clips under `rm*/babb/*.wav`. |
 | `VOICE_MANIFEST` | Optional reference voices. Use `schema_version: 1` and a `voices` array. Each item has `id`, `gender`, `reference_audio`, `source_url`, `license` and `sha256`. Relative WAV paths resolve from the manifest directory. |
 
 ```bash
@@ -119,11 +119,29 @@ python -m scripts.production.scale_moss --check
 python -m scripts.production.scale_moss --root output/moss --hours 0.05
 ```
 
-For GPU use `requirements-moss-gpu.txt` instead of the CPU dependency file. CUDA inference has been tested on an AutoDL Linux instance; a fresh install using that requirements file has not yet been verified. `--check` does not create a CUDA session, so run a short GPU sample first.
+For GPU use `requirements-moss-gpu.txt` instead of the CPU dependency file. A fresh Python 3.12 environment using this file ran MOSS CUDA on an AutoDL Linux image with CUDA/cuDNN already installed; other GPU environments still need their own validation. `--check` does not create a CUDA session, so run a short GPU sample first.
 
 For English, add `--language en`; for a configured CUDA environment, select `--tts-backend moss_onnx --tts-device cuda`. See [TTS backends and voice registration](scripts/sound/TTS.md) for setup, fixed assistant voices and optional reference voices.
 
 `--check` validates local inputs without loading models or calling the API. The final command requests at least three minutes of credited audio. Reuse the same `--root` to resume from completion receipts.
+
+## Incremental production and upload
+
+For a small end-to-end run, use a new output directory outside the source repository and a dataset you can write to:
+
+```bash
+python -m scripts.production.moss_scale.produce_and_upload --root /path/to/output --repo OWNER/DATASET --hours-zh 0.05 --hours-en 0.05 --tts-device cuda --execute
+```
+
+Configure the LLM and Hugging Face credentials locally first. Completed clean/noisy pairs upload in batches while generation continues. The run stores a unique namespace and verified upload receipts for resumption. It checks the final dataset revision and does not count the paired audio twice. Omitting `--execute` only prints the plan. `--workers 2` runs both languages in parallel when GPU memory and throughput permit; measure on your hardware. A user-created `STOP` file in a language output directory stops that producer.
+
+Use VOiCES background recordings for `BG_SOURCE_DIR`; new annotations include the source, attribution, license and mixing details for the noisy variant. Exact clean-audio hashes are deduplicated within a run, not against the entire existing dataset.
+
+This coordinator has local and fault-simulation coverage; large-scale unattended GPU production and every possible network failure are not yet validated. Review representative scripts and audio before scaling.
+
+By default the coordinator stops when a producer makes no new delivery for 30 minutes or the run exceeds 24 hours; both limits are configurable. It stops its own processes, not cloud billing: configure an independent, provider-side instance shutdown or spending limit before unattended use.
+
+An already submitted prefetch request cannot be recalled when STOP is set. The coordinator gives producers a short shutdown grace period, then terminates its own remaining workers; resume using the same output root.
 
 ## Repository layout
 
@@ -170,7 +188,7 @@ print(timeline[0]["speaker"], timeline[0]["start_sec"], timeline[0]["end_sec"])
 
 The data consists of synthetic Chinese and English dialogue. Generation checks script structure, timing, truncation and audio format. Rule checks and prompt guidance do not verify every factual claim or guarantee natural dialogue. The CLI currently runs without ASR. The dataset card lists available recordings, audio demos and sources. [Hugging Face dataset](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex)
 
-VOiCES is from SRI International / Lab41, In-Q-Tel, under CC BY 4.0. Preserve attribution when redistributing audio mixes. For human voice references, use appropriately licensed clips and keep their source and licence in the manifest. [VOiCES corpus](https://registry.opendata.aws/lab41-voices/)
+VOiCES is from SRI International / Lab41, In-Q-Tel, under CC BY 4.0. Preserve attribution when redistributing audio mixes. For human voice references, use appropriately licensed clips and keep their source and licence in the manifest. [VOiCES corpus](https://registry.opendata.aws/lab41-sri-voices/)
 
 Maintainer · David
 

@@ -8,17 +8,11 @@ REPO="BiggestWave/Chorus-Duplex"
 PREFIX="releases/2026-10-31-v5-moss"
 
 def api_client():
+    from .credentials import hf_token
+    token = hf_token()
     from .network import configure_hf_transport
     configure_hf_transport()
-    from scripts.config import load_env
-    from huggingface_hub import HfApi,get_token
-    load_env()
-    token=os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-    paths=(Path.home()/"Desktop"/"pass-word"/"hf_token.txt",Path.home()/"Desktop"/"hf_token.txt")
-    for path in paths:
-        if not token and path.is_file():token=path.read_text(encoding="utf-8-sig").strip()
-    if not token:token=get_token()
-    if not token:raise RuntimeError("No existing authorized HF credential is available")
+    from huggingface_hub import HfApi
     return HfApi(endpoint="https://huggingface.co",token=token)
 
 def remote_matches(info,data):

@@ -1,7 +1,7 @@
 """推送版本产物到 Hugging Face 数据集仓库（可复用：预览 N 条 / 全量）。
 
 - 音频转 FLAC（无损、体积小；大 wav 在 hf-mirror 上走 multipart 易失败）
-- 走 hf-mirror 端点 + 禁用 Xet + 修正 hf-mirror multipart 域名拼写问题（同 push_hf.py）
+- 默认使用 Hugging Face 官方端点；可自行配置可信的镜像
 - 产物（单文件夹布局，2026-09-15 用户定）：
   audio/{id}.flac（干净版）+ audio/{id}_babble.flac（带背景版，来自 {version}/mixed/）
   + audio/{id}.timeline.json + annotations.jsonl + README.md / README_zh.md + scripts.md + stats.md
@@ -19,29 +19,18 @@ import sys
 import time
 from pathlib import Path
 
-_default_hf_home = (Path("D:/DuplexVoice_resources/hf_home") if os.name == "nt"
+_default_hf_home = (Path("D:/DuplexVoice_resources/hf_home") if os.name == "nt" and Path("D:/").is_dir()
                     else Path("/mnt/d/DuplexVoice_resources/hf_home")
                     if Path("/mnt/d").is_dir() else Path.home() / ".cache" / "huggingface")
 HF_HOME = Path(os.environ.get("HF_HOME", _default_hf_home))
 
 
 def _setup_hf_env() -> None:
-    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+    os.environ.setdefault("HF_ENDPOINT", "https://huggingface.co")
     os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     HF_HOME.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("HF_HOME", str(HF_HOME))
-
-    import httpx  # noqa: PLC0415
-    _orig_send = httpx.Client.send
-
-    def _patched(self, request, **kwargs):
-        if "hf-mirror.org" in str(request.url):
-            request.url = httpx.URL(str(request.url).replace("hf-mirror.org", "hf-mirror.com"))
-        return _orig_send(self, request, **kwargs)
-
-    httpx.Client.send = _patched
-
 
 MY_ENV_PY = os.environ.get("CHORUS_AUDIO_PYTHON", sys.executable)
 
@@ -206,13 +195,13 @@ def main() -> None:
             print(f"❌ 缺失: {p}"); sys.exit(1)
 
     token_file = args.token_file or os.environ.get("HF_TOKEN_FILE")
-    desktop_token = Path.home() / "Desktop" / "pass-word" / "hf_token.txt"
-    if not token_file and desktop_token.is_file():
-        token_file = desktop_token
-    # Without an explicit file, the Hugging Face SDK can use its own login store.
-    token = Path(token_file).read_text(encoding="utf-8-sig").strip() if token_file else None
-
     _setup_hf_env()
+    if token_file:
+        from scripts.production.publishing.credentials import read_token_file
+        token = read_token_file(token_file)
+    else:
+        from scripts.production.publishing.credentials import hf_token
+        token = hf_token()
     from huggingface_hub import HfApi  # noqa: PLC0415
 
     api = HfApi(token=token)
