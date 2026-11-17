@@ -154,6 +154,46 @@ def numeric_safety_advice_needs_review(text: str) -> bool:
     return bool(re.search(number, text, re.I) and re.search(risk, text, re.I))
 
 
+_RATIO_NUMBER = r"(?:[1-9][0-9]?|[一二两三四五六七八九十])"
+_CHINESE_RATIO = re.compile(
+    r"(?P<first>[\u3400-\u9fff]{1,12})(?:和|与|跟)"
+    r"(?P<second>[\u3400-\u9fff]{1,12}?)(?<![零一二两三四五六七八九十])"
+    r"(?:\s*[，,]?\s*(?:的?(?:比例|配比)(?:是|为|[:：])?|是|为))?\s*"
+    rf"(?P<a>{_RATIO_NUMBER})\s*(?:比|[:：])\s*(?P<b>{_RATIO_NUMBER})"
+    r"(?![0-9零一二两三四五六七八九十.点半])"
+)
+_RATIO_LEAD = re.compile(
+    r"^(?:(?:重新选择|纠正一下|调整成|调整为|更正为|修正为|说错了|弄反了|记错了|"
+    r"改成|改为|改用|换成|我们|你们|大家|然后|后来|建议|可以|准备|试试|觉得|"
+    r"记得|应该|应当|大概|大约|刚才|现在|以前|我|你|那|先|按|把|用|将|再|要|想|的|是))+"
+)
+_RATIO_INTENTIONAL_CHANGE = re.compile(
+    r"改成|改为|改用|换成|调整成|调整为|更正为|修正为|纠正一下|"
+    r"说错了|弄反了|记错了|重新选择|不对[，,\s]*(?:应该|应当|是)"
+)
+_RATIO_NUMBERS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+                  "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+_RATIO_NON_NOUNS = {"我", "你", "他", "她", "它", "我们", "你们", "大家"}
+
+
+def _chinese_ratio_mentions(text):
+    """Extract only simple ordered two-item ratios; unsupported wording is ignored."""
+    for match in _CHINESE_RATIO.finditer(text):
+        first = _RATIO_LEAD.sub("", match.group("first"))
+        second = match.group("second")
+        if (not first or not second or first == second
+                or first in _RATIO_NON_NOUNS or second in _RATIO_NON_NOUNS
+                or any(re.fullmatch(r"[零一二两三四五六七八九十]+", item) for item in (first, second))):
+            continue
+        a = _RATIO_NUMBERS.get(match.group("a"))
+        b = _RATIO_NUMBERS.get(match.group("b"))
+        a = a if a is not None else int(match.group("a"))
+        b = b if b is not None else int(match.group("b"))
+        sentence_start = max((text.rfind(mark, 0, match.start()) for mark in "。？！?!；;"), default=-1) + 1
+        context = text[max(sentence_start, match.start() - 16):match.end()]
+        yield first, second, a, b, bool(_RATIO_INTENTIONAL_CHANGE.search(context))
+
+
 def possible_group_decision(text):
     """Identify wording worth reviewing; it does not establish whether consensus exists."""
     text = text.replace("’", "'")
@@ -237,7 +277,23 @@ def audit(d: Dialogue, required: list[str] | None = None) -> dict:
     user_count = len({p.id for p in d.participants if p.id.startswith("user_")})
     host = None
     counts = {"barge_in": 0, "ai_backchannel": 0, "backchannel": 0, "interruption": 0}
+    ratio_history = {}
     for i, t in enumerate(d.turns):
+        current_ratios = {}
+        for first, second, a, b, intentional in _chinese_ratio_mentions(t.text):
+            pair = frozenset((first, second))
+            # The final mention may correct an earlier ratio in this same turn.
+            current_ratios[pair] = (i, first, second, a, b, intentional)
+        for pair, (_, first, second, a, b, intentional) in current_ratios.items():
+            previous = ratio_history.get(pair)
+            if previous:
+                prior_turn, prior_first, prior_second, prior_a, prior_b = previous
+                if (prior_first == second and prior_second == first and a != b and prior_a != prior_b
+                        and a * prior_b == prior_a * b and not intentional):
+                    warnings.append({"code": "possible_reversed_ratio", "turn_id": i,
+                                     "detail": f"item order reverses turn {prior_turn} while the numeric ratio stays the same; "
+                                               "review context for a possible correction or intentional change"})
+        ratio_history.update({pair: values[:5] for pair, values in current_ratios.items()})
         if t.speaker not in valid and not t.speaker.startswith("third_party_"):
             flag("invalid_speaker", i, t.speaker)
         if t.kind not in {"speech","backchannel","interruption","side_talk","incomplete"}:

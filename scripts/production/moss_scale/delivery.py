@@ -4,11 +4,13 @@ import hashlib
 import json
 import os
 import random
+import re
 
 import soundfile as sf
 
 from scripts.sound.background.clips import stitch_clips
 from scripts.sound.background.mix import mix
+from scripts.sound.synthesis.backends import QwenBackend, RegistryBackend
 from scripts.sound.synthesis.dialogue_to_wav import SAMPLE_RATE
 
 from .config import background_root
@@ -82,6 +84,31 @@ def recover_deliveries(root, dedupe_db=None):
         finish_delivery(root, pending)
 
 
+def _qwen_runtime(synth):
+    """Return safe runtime facts only for the built-in Qwen adapter.
+
+    These are process/device settings, not a model revision or weight identity.
+    Unknown or user-defined backends do not get a guessed runtime record.
+    """
+    backend = getattr(synth, "backend", None)
+    if type(backend) is RegistryBackend:
+        backend = vars(backend).get("backend")
+    if type(backend) is not QwenBackend:
+        return None
+    device = getattr(backend, "device", None)
+    if (not isinstance(device, str) or len(device) > 32
+            or re.fullmatch(r"(?:cpu|cuda:(?:0|[1-9][0-9]*))", device) is None):
+        return None
+    try:
+        dtype = {"torch.float32": "float32", "torch.bfloat16": "bfloat16"}.get(
+            str(getattr(backend, "dtype", None)))
+    except Exception:
+        return None
+    if dtype is None or (device == "cpu" and dtype != "float32"):
+        return None
+    return {"engine": "qwen3", "device": device, "dtype": dtype}
+
+
 def deliver(d, synth, root, known_clean_hashes=None, dedupe_db=None):
     ident = d["dialogue_id"]
     stage = root / "staging" / ident
@@ -119,7 +146,13 @@ def deliver(d, synth, root, known_clean_hashes=None, dedupe_db=None):
         "room": room.parent.name,
         "target_snr_db": 10,
     }
-    annotation = {**d, "profile": {**d.get("profile", {}), "background_provenance": attribution}}
+    profile = {**d.get("profile", {}), "background_provenance": attribution}
+    # Runtime is a reserved delivery fact; do not trust a stale script value.
+    profile.pop("tts_runtime", None)
+    runtime = _qwen_runtime(synth)
+    if runtime is not None:
+        profile["tts_runtime"] = runtime
+    annotation = {**d, "profile": profile}
     payload = {"annotation":annotation,"frames":frames,"sample_rate":SAMPLE_RATE,
                "credited_seconds":frames/SAMPLE_RATE-pause_ms/1000-d["turns"][0]["gap_before_ms"]/1000,
                "background":{"corpus":"VOiCES","license":"CC BY 4.0","room":room.parent.name,
