@@ -188,10 +188,12 @@ def plan_slots(users, events, group, repeat, group_interrupt, transition, handof
         if not order and len(slots) == target // 2:
             add("assistant", "all", refs=[len(slots)-1], cue="结合刚才的意见给一个具体建议。")
         else:
-            speaker = rng.choice(users)
+            candidates = [user for user in users if user != slots[-1]["speaker"]] or users
+            speaker = rng.choice(candidates)
             add(speaker, "all", refs=[len(slots)-1], cue="按上下文补充细节、安排或不同意见。")
-    finish = add(first, "assistant", refs=[len(slots)-1], cue="提出自己的下一步或保留意见，不代替其他人决定。")
-    add("assistant", first, refs=[finish], cue="依照已表达的态度自然收束，不宣布未经确认的全体决定。")
+    closing_speaker = first if slots[-1]["speaker"] != first or len(users) == 1 else rng.choice([user for user in users if user != first])
+    finish = add(closing_speaker, "assistant", refs=[len(slots)-1], cue="提出自己的下一步或保留意见，不代替其他人决定。")
+    add("assistant", closing_speaker, refs=[finish], cue="依照已表达的态度自然收束，不宣布未经确认的全体决定。")
     for index, slot in enumerate(slots):
         if slot.get("interaction") != "choice_confirmation":
             continue
@@ -222,6 +224,7 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
         "带 fixed_text 的轮次必须逐字使用给定台词，不能改变这些选项。"
         "写作提示是给作者的上下文，不要将提示或规则本身照读成对话。"
         "不要读角色编号。关系设定只适用于人类角色，助手是语音助手。向助手说话时不要使用亲属称呼。"
+        "台词中直接称呼或询问的人必须对应本轮addressee；提到第三方时用转述，不要让助手直接向未被标为接收者的第三方提问。姓名只有在先前已说出口且对应角色明确时才能用于称呼，指代不清就省略姓名。"
         "助手只提供建议，不声称亲历、在场、已查询实时信息、替用户操作或发群消息。保持同一话题，对已经说出的信息作回应。"
         "助手没有定时提醒能力，不声称之后会主动提醒。"
         "事实性建议只依据已知条件；不确定时先提出需核实的条件，不保证收益、安全或其他结果。"
@@ -230,8 +233,9 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
         "食品、过敏与健康建议要承接已知限制；缺少食材、设备或数量信息时，不要编造具体烹饪时长、批次或熟透保证。"
         "区分无添加糖和总糖、碳水；记住每项限制是谁说的，转述别人时指明对方，不要改成‘我’；自己的新情况可以自然补充。设备兼容先确认接口，别默认一定能用。"
         "卖家政策、退货期限和保修条件未知时，请先核实，不能猜具体天数；检查刀具或设备时不要建议直接用手接触刀刃。"
-        "已明确出现电器接触不良需用手按住、自动断电失灵或冒烟等故障时，先建议停止使用、安全可行时断电并请专业人员检查，不要继续试验。"
+        "已明确出现电器接触不良需用手按住、自动断电失灵、排插开关不可靠、线缆破损或冒烟等故障时，先建议停止使用该故障设备、安全可行时断电并请专业人员检查；减少设备数或降低负荷不等于故障排除，不得建议继续试用故障设备。"
         "后续话轮推进尚未解决的事情，不要反复重新确定已明确的日期或安排。打断必须增加新的限制或纠正，而不是重复助手刚说过的内容。"
+        "用户要推荐或方案且条件足够时，助手至少给出一个符合已知限制的具体例子或可执行步骤，不能整段只让用户自己选、再讨论。条件不足时先问关键条件，不编造条件。"
         "答应比较或解释时要实际推进，没空间展开就不要作该承诺；勿将需要加工的操作说成无需烹饪。"
         "逐人保持已表达的限制；如果某人的关键限制尚未解决或尚未同意，不能宣布全体已定，应请其确认。"
         "不知道设备型号、接口或配件是否存在时，不能保证具体功能；二选一也不能无故改成两个都执行。"
@@ -242,13 +246,14 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
         instruction += (
             "LANGUAGE OVERRIDE: Write every spoken line in natural conversational English. "
             "The Chinese cues describe the scene and timing only. Use English punctuation. "
+            "Direct questions and vocatives must match that turn's addressee. Refer to third parties indirectly unless they are the marked recipient. Use a name as a direct address only after it has been spoken and clearly linked to that recipient; otherwise omit it. "
             "The assistant gives suggestions only: never say it will buy, book, call, send messages, "
             "remind people later, or create and share documents. It may ask a person to do those things. "
             "Make factual advice conditional on what is known; avoid unsupported guarantees or assuming facts about health, wiring or weather. "
             "Do not invent device-specific capacity, size, speed, or safety thresholds. "
             "Keep known allergies in view; don't invent cooking time or batch counts when food, equipment or quantity are unknown. "
             "Don't guess store return windows or warranties; suggest checking the seller's actual terms. Don't suggest touching blades. "
-            "For an explicitly malfunctioning electrical device, including a faulty contact requiring someone to hold it, advise stopping use, isolating power when safe and seeking professional inspection. "
+            "For an explicitly malfunctioning electrical device, including a faulty contact, unreliable power-strip switch, or damaged cord, advise stopping use of that device, isolating power when safe and seeking professional inspection. Reducing the number of connected devices or their load does not repair a fault; do not suggest testing or continuing to use the faulty device. "
             "Move the conversation forward instead of reopening settled dates, and make interruptions add a genuinely new constraint. "
             "Do not declare a group decision while a person's stated constraint or agreement remains unconfirmed. "
             "Do not promise device functions before checking the necessary equipment or turn an either/or choice into doing both. "
@@ -260,6 +265,7 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
             "Attribute each stated restriction to its speaker: refer to the other person when recalling theirs, "
             "while allowing people to introduce their own new constraints. Distinguish added sugar from total sugar or carbohydrates, "
             "and check device connectors before assuming compatibility. Don't call toasting no preparation. "
+            "When a user requests recommendations or a plan and enough is known, give at least one concrete example or actionable step consistent with the stated constraints. Don't spend the whole conversation asking users to choose and discuss it themselves. Ask for essential missing information rather than inventing it. "
             "If the assistant promises an explanation, follow through instead of repeating the plan. "
             "Separate the requested filler from that clause with a comma, ellipsis, or em dash, "
             "and end the unfinished part with an ellipsis or em dash. Treat a multiword filler as a spoken aside. "
@@ -303,7 +309,8 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
             # of preferences, restrictions and commitments across draft calls.
             request["前半段已说过的台词"] = {
                 key: {"speaker": slots[int(key)]["speaker"],
-                      "kind": slots[int(key)]["kind"], "text": wording}
+                      "kind": slots[int(key)]["kind"],
+                      "addressee": slots[int(key)]["addressee"], "text": wording}
                 for key, wording in authored.items()
             }
         raw = chat(instruction, json.dumps(request, ensure_ascii=False, separators=(",", ":")),
