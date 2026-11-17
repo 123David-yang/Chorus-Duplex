@@ -9,6 +9,43 @@ from scripts.production.moss_scale.slots import draft_from_slots, plan_slots
 
 
 class DialogueContextPromptTests(unittest.TestCase):
+    def test_copied_shape_example_is_rejected(self):
+        users = ["user_01", "user_02"]
+        slots = plan_slots(users, ["backchannel"], False, False, False, False, False, random.Random(4), 14, "zh")
+        def copied(system, user, **kwargs):
+            request = json.loads(user)
+            result = request["输出结构示例_请用实际台词替换占位内容"]
+            for value in result.values():
+                if isinstance(value, list):
+                    value[1] += "接着继续说明具体安排"
+            return json.dumps(result, ensure_ascii=False)
+        with patch("scripts.production.moss_scale.slots.chat", side_effect=copied):
+            with self.assertRaisesRegex(ValueError, "占位内容"):
+                draft_from_slots(slots, users, {"场景": "讨论", "领域": "生活", "关系": "朋友"}, "direct", [], "zh")
+
+    def test_output_shape_example_matches_each_planned_split_turn(self):
+        users = ["user_01", "user_02"]
+        slots = plan_slots(users, ["incomplete", "backchannel"], False, False, False,
+                           False, False, random.Random(4), 14, "zh")
+        observed = []
+        def fake_chat(system, user, **kwargs):
+            request = json.loads(user)
+            observed.append(request)
+            return json.dumps({key: ["这个地方先说完", "然后接着说具体事情"]
+                               if turn.get("form") in {"anchor", "resume", "transition"} else "普通台词"
+                               for key, turn in request["待写轮次"].items()}, ensure_ascii=False)
+        # Only inspect the outgoing request; resume validation may reject the fake wording.
+        with patch("scripts.production.moss_scale.slots.chat", side_effect=fake_chat):
+            try:
+                draft_from_slots(slots, users, {"场景": "讨论", "领域": "生活", "关系": "朋友"}, "direct", [], "zh")
+            except ValueError:
+                pass
+        request = observed[0]
+        example = request["输出结构示例_请用实际台词替换占位内容"]
+        self.assertEqual(set(example), set(request["待写轮次"]))
+        for key, turn in request["待写轮次"].items():
+            self.assertEqual(isinstance(example[key], list), turn.get("form") in {"anchor", "resume", "transition"})
+
     def test_closing_reply_targets_the_actual_final_user(self):
         for count in (1, 2, 4):
             users = [f"user_{i+1:02d}" for i in range(count)]

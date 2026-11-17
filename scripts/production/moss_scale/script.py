@@ -261,7 +261,7 @@ def generate(index, root, mode="direct", language="zh"):
             except ValueError:
                 safe_draft = None
             atomic_json(root/"staging"/f"{ident}-planned-reject-{attempt}.json",
-                        {"error":diagnostic["hint"], "code":diagnostic["code"], "draft":safe_draft})
+                        {"error":diagnostic["hint"], "code":diagnostic["code"], "diagnostic":diagnostic, "draft":safe_draft})
             context["上次问题"] = diagnostic["hint"]
             if attempt:
                 raise

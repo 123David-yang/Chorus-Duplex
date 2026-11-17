@@ -235,6 +235,8 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
         "卖家政策、退货期限和保修条件未知时，请先核实，不能猜具体天数；检查刀具或设备时不要建议直接用手接触刀刃。"
         "已明确出现电器接触不良需用手按住、自动断电失灵、排插开关不可靠、线缆破损或冒烟等故障时，先建议停止使用该故障设备、安全可行时断电并请专业人员检查；减少设备数或降低负荷不等于故障排除，不得建议继续试用故障设备。"
         "后续话轮推进尚未解决的事情，不要反复重新确定已明确的日期或安排。打断必须增加新的限制或纠正，而不是重复助手刚说过的内容。"
+        "已经给出的建议和已确认状态只在必要时简短承接，后续回答应解决当前的新问题。被问谁来执行时，依据已表达的意愿分工；无人承诺时直接询问谁方便，不要反复只说‘找个人’或编造已有人执行。"
+        "前文要求的安全条件必须在后续操作确认中成立：尚未确认安全断电时，不能直接认可拔设备或移动故障排插；无法安全接近时交由专业人员处理。多人同时补充条件后，回答要承接每个人尚未解决的要点。"
         "用户要推荐或方案且条件足够时，助手至少给出一个符合已知限制的具体例子或可执行步骤，不能整段只让用户自己选、再讨论。条件不足时先问关键条件，不编造条件。"
         "答应比较或解释时要实际推进，没空间展开就不要作该承诺；勿将需要加工的操作说成无需烹饪。"
         "逐人保持已表达的限制；如果某人的关键限制尚未解决或尚未同意，不能宣布全体已定，应请其确认。"
@@ -256,6 +258,8 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
             "Don't guess store return windows or warranties; suggest checking the seller's actual terms. Don't suggest touching blades. "
             "For an explicitly malfunctioning electrical device, including a faulty contact, unreliable power-strip switch, or damaged cord, advise stopping use of that device, isolating power when safe and seeking professional inspection. Reducing the number of connected devices or their load does not repair a fault; do not suggest testing or continuing to use the faulty device. "
             "Move the conversation forward instead of reopening settled dates, and make interruptions add a genuinely new constraint. "
+            "Keep confirmed decisions and completed actions consistent. Answer the current new question instead of repeating the same advice. When asked who should act, use stated volunteers or ask who is available; don't repeatedly say 'someone' or invent that a person has already acted. "
+            "Carry required safety preconditions into later action confirmations: don't approve unplugging devices or moving faulty equipment before safe power isolation has been established; if it cannot be approached safely, defer to qualified help. Address each unresolved point when several people add constraints at once. "
             "Do not declare a group decision while a person's stated constraint or agreement remains unconfirmed. "
             "Do not promise device functions before checking the necessary equipment or turn an either/or choice into doing both. "
             "Before returning JSON, check that each question is answered and each person's constraints remain consistent. "
@@ -303,6 +307,10 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
         two_part_turns = [i for i, turn in turns.items() if turn.get("form") in {"anchor", "resume", "transition"}]
         if two_part_turns:
             request["必须输出两个台词字符串数组的轮次"] = two_part_turns
+            request["输出结构示例_请用实际台词替换占位内容"] = {
+                key: ["第一段台词", "第二段台词"] if key in two_part_turns else "本轮台词"
+                for key in turns
+            }
         if seeds:
             request["短附和措辞参考"] = seeds
         if authored:
@@ -336,7 +344,8 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
             wording = "".join(wording)
         if split:
             if not isinstance(wording, list) or len(wording) != 2 or not all(isinstance(x, str) and x.strip() for x in wording):
-                raise ValueError(f"第{i}轮缺少两段台词")
+                from .errors import DraftShapeError
+                raise DraftShapeError(i, wording)
             head, tail = (x.strip() for x in wording)
             if form == "anchor":
                 head = head.rstrip("，。；、！？,.;!? ")
@@ -388,6 +397,8 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
                 if not item["text"].endswith(("……", "——", "...", "…", "—")):
                     raise ValueError(f"第{i}轮犹豫接话须标出尚未说完的位置")
                 item.update(parts=[item["text"]], resolution="assistant_handoff")
+        if any(marker in item["text"] for marker in ("本轮台词", "第一段台词", "第二段台词")):
+            raise ValueError("输出包含结构示例占位内容")
         output.append(item)
     return dict(setting=context["场景"], topic=context["领域"],
                 participants=[dict(id=u, persona=context["关系"], style="自然口语") for u in users],

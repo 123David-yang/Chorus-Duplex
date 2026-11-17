@@ -5,7 +5,16 @@ import json
 import re
 
 
+class DraftShapeError(ValueError):
+    def __init__(self, turn_id: int, value):
+        self.turn_id = turn_id
+        self.received_type = type(value).__name__ if type(value) in (str, list, dict, int, float, bool, type(None)) else "unknown"
+        self.received_items = len(value) if isinstance(value, list) else None
+        super().__init__("缺少两段台词")
+
+
 _HINTS = (
+    ("结构示例占位内容", "template_placeholder", "结构示例仅说明格式，所有占位内容都须替换为实际对白。"),
     ("台词编号与事件计划不一致", "turn_ids", "台词编号应与事件计划完全一致。"),
     ("缺少两段台词", "missing_parts", "指定轮次需要两个非空台词片段。"),
     ("未完成的第一段", "incomplete_start", "未完成的第一段须在尚未说完的位置停住。"),
@@ -23,6 +32,10 @@ _HINTS = (
 
 
 def safe_diagnostic(exc: Exception) -> dict:
+    if isinstance(exc, DraftShapeError):
+        return {"type": "DraftShapeError", "code": "missing_parts", "turn_id": exc.turn_id,
+                "received_type": exc.received_type, "received_items": exc.received_items,
+                "hint": f"第{exc.turn_id}轮须返回两个非空台词字符串组成的数组。"}
     name = type(exc).__name__
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", name):
         name = "Error"
