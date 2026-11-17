@@ -151,7 +151,15 @@ class DeliveryUploadTests(unittest.TestCase):
             _assert_public_safe({"profile": {"token": "example"}})
         with self.assertRaisesRegex(ValueError, "Sensitive field"):
             _assert_public_safe({"profile": {"openai_api_key": "example"}})
+        for value in ("AKIA" + "X" * 16, "Bearer " + "x" * 25, "token=" + "x" * 25):
+            with self.assertRaisesRegex(ValueError, "Possible credential"):
+                _assert_public_safe({"text": "附" + value + "请保管"})
+        for value in ("person" + "@example.invalid", "138" + "00000000", "138-" + "0000-0000",
+                      "138 " + "0000 0000", "\\\\" + "server\\share\\file", "C:" + "\\Users\\person"):
+            with self.assertRaisesRegex(ValueError, "private contact or local path"):
+                _assert_public_safe({"text": "附" + value + "请保管"})
         _assert_public_safe({"source_url": "https://example.invalid/file"})
+        _assert_public_safe({"sha256": "a" + "13800000000" + "b" * 52})
 
     def test_rejects_sensitive_timeline(self):
         name = f"{self.ident}.timeline.json"

@@ -212,6 +212,10 @@ def ai_request_candidates(d):
 def audit(d: Dialogue, required: list[str] | None = None) -> dict:
     issues = []
     warnings = []
+    review = d.profile.get("targeted_safety_review")
+    if isinstance(review, dict) and review.get("status") == "rewritten":
+        warnings.append({"code": "targeted_review_unverified", "turn_id": review.get("turn_id"),
+                         "detail": "model revision requires independent contextual safety review"})
     def flag(code, i, detail):
         issues.append({"code": code, "turn_id": i, "detail": detail})
     valid = {p.id for p in d.participants} | {"assistant"}

@@ -137,6 +137,8 @@ Configure the LLM and Hugging Face credentials locally first. Completed clean/no
 
 Use VOiCES background recordings for `BG_SOURCE_DIR`; new annotations include the source, attribution, license and mixing details for the noisy variant. Exact clean-audio hashes are deduplicated within a run, not against the entire existing dataset.
 
+Optional targeted review is off by default. Set `CHORUS_TARGETED_SAFETY_REVIEW=1` to allow at most one additional call to the configured LLM per generation invocation when an electrical-fault response is locally flagged. It sends up to four assistant-visible synthetic turns; use it only for synthetic scripts, as sensitive-text filters are not exhaustive. Costs accumulate with flagged scripts, and a crash before saving can cause a new call on resume. Fixed, anchored or interrupted turns are skipped; warnings remain. This is not a safety guarantee. Remote LLM endpoints require HTTPS; loopback HTTP is allowed for local inference.
+
 This coordinator has local and fault-simulation coverage; large-scale unattended GPU production and every possible network failure are not yet validated. Review representative scripts and audio before scaling.
 
 By default the coordinator stops when a producer makes no new delivery for 30 minutes or the run exceeds 24 hours; both limits are configurable. It stops its own processes, not cloud billing: configure an independent, provider-side instance shutdown or spending limit before unattended use.

@@ -220,8 +220,10 @@ def generate(index, root, mode="direct", language="zh"):
                    backchannel_to_interruption=backchannel_to_interruption,
                    sequential_backchannels=not simultaneous, repeat_listener=repeat_listener, language=language,
                    simultaneous_requests=simultaneous_requests)
+    targeted_calls = 0
     for attempt in range(2):
         d = None
+        targeted_review = None
         try:
             d = draft_from_slots(slots, users, context, mode, seeds, language)
             try:
@@ -231,6 +233,24 @@ def generate(index, root, mode="direct", language="zh"):
                     raise
                 shorten_backchannels(d)
                 validate(d, users, events, group, group_interrupt, **options)
+            if os.environ.get("CHORUS_TARGETED_SAFETY_REVIEW") == "1" and not targeted_calls:
+                from .targeted_review import review_once
+                targeted_review, trace = review_once(d, slots, language)
+                targeted_calls += targeted_review["calls"]
+                if trace is not None:
+                    try:
+                        validate(d, users, events, group, group_interrupt, **options)
+                    except (ValueError, KeyError, TypeError):
+                        d["turns"][targeted_review["turn_id"]]["text"] = trace["original"]
+                        targeted_review["status"] = "rewrite_rejected"
+                        trace["status"] = "rewrite_rejected"
+                    atomic_json(root/"staging"/f"{ident}-safety-review-{attempt}.json", {
+                        "turn_id": targeted_review["turn_id"], "status": targeted_review["status"],
+                        "original_sha256": hashlib.sha256(trace["original"].encode("utf-8")).hexdigest(),
+                        "revised_sha256": hashlib.sha256(trace["revised"].encode("utf-8")).hexdigest(),
+                    })
+            elif os.environ.get("CHORUS_TARGETED_SAFETY_REVIEW") == "1":
+                targeted_review = {"status": "budget_exhausted", "calls": targeted_calls}
             break
         except (ValueError, KeyError, TypeError) as exc:
             diagnostic = safe_diagnostic(exc)
@@ -275,6 +295,8 @@ def generate(index, root, mode="direct", language="zh"):
                     "requested_simultaneous_requests": simultaneous_requests}
     if language == "en":
         d["profile"]["language"] = "en"
+    if targeted_review and targeted_review["status"] != "not_triggered":
+        d["profile"]["targeted_safety_review"] = targeted_review
     apply_rule_quality(d)
     atomic_json(path, d)
     return d

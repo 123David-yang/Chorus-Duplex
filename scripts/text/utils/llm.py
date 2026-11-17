@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 import http.client
+import ipaddress
 import json
 import os
 import socket
@@ -55,6 +56,17 @@ def _config() -> tuple[str,str,str]:
     key=os.environ.get("LLM_API_KEY","")
     model=os.environ.get("LLM_MODEL","deepseek-chat")
     if not key: raise RuntimeError("LLM_API_KEY is not configured")
+    scheme, host, _ = _origin(base)
+    parsed = urllib.parse.urlsplit(base)
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("LLM endpoint URL must not contain credentials, a query or a fragment")
+    if scheme == "http":
+        try:
+            loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            loopback = False
+        if not loopback:
+            raise ValueError("Remote LLM endpoints require HTTPS")
     return base,key,model
 
 

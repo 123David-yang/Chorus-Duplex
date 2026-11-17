@@ -72,6 +72,13 @@ def draft(language, mode, seed=15):
 
 
 class DialogueQualityTests(unittest.TestCase):
+    def test_targeted_model_rewrite_remains_marked_for_review(self):
+        data = draft("en", "direct")
+        data["profile"]["targeted_safety_review"] = {"status": "rewritten", "turn_id": 1, "calls": 1}
+        result = audit(Dialogue.from_jsonl_line(json.dumps(data)))
+        self.assertIn("targeted_review_unverified", [warning["code"] for warning in result["warnings"]])
+        self.assertTrue(result["passed"])
+
     def test_narrow_semantic_warnings_are_hints_not_rejections(self):
         self.assertTrue(device_capability_needs_review("A headset jack covers listening and speaking."))
         self.assertFalse(device_capability_needs_review("Check whether the headset has a microphone."))
@@ -486,6 +493,18 @@ class DialogueQualityTests(unittest.TestCase):
 
 
 class LLMNetworkTests(unittest.TestCase):
+    def test_remote_llm_http_is_refused_but_loopback_and_https_are_allowed(self):
+        from scripts.text.utils.llm import _config
+        for endpoint in ("http://example.invalid/v1", "http://192.168.1.7/v1",
+                         "https://name:pass@example.invalid/v1"):
+            with self.subTest(endpoint=endpoint), patch.dict(os.environ, {"LLM_API_KEY": "fake", "LLM_BASE_URL": endpoint}):
+                with self.assertRaises(ValueError):
+                    _config()
+        for endpoint in ("http://127.0.0.1:8080/v1", "http://localhost:8080/v1", "http://[::1]:8080/v1",
+                         "https://example.invalid/v1"):
+            with self.subTest(endpoint=endpoint), patch.dict(os.environ, {"LLM_API_KEY": "fake", "LLM_BASE_URL": endpoint}):
+                self.assertEqual(_config()[0], endpoint)
+
     def test_complete_json_surviving_early_close_is_used_without_a_second_paid_call(self):
         payload = json.dumps({"choices": [{"finish_reason": "stop", "message": {"content": "complete reply"}}]}).encode()
         class Response:

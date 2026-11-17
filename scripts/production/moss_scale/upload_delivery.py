@@ -55,9 +55,18 @@ _SENSITIVE_FIELD = re.compile(
 )
 _SECRET_TEXT = re.compile(
     r"(?i)(?:hf_[A-Za-z0-9]{20,}|(?:ghp_|gho_|ghs_|ghu_|ghr_|github_pat_)[A-Za-z0-9_]{20,}|"
-    r"sk-[A-Za-z0-9_-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)"
+    r"sk-[A-Za-z0-9_-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
+    r"(?<![A-Z0-9_])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9_])|"
+    r"(?<![A-Z0-9_])bearer\s+[A-Za-z0-9._~+/=-]{8,}|"
+    r"(?<![A-Z0-9_])(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|authorization|token)\s*[:=]\s*\S{8,})"
 )
 _URL = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+_PRIVATE_PUBLIC_TEXT = re.compile(
+    r"(?i)(?:(?<![A-Z0-9._%+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}(?![A-Z0-9_-])|"
+    r"(?<![A-Z0-9])(?:\+?86[- ]?)?1[3-9]\d(?:[- ]?\d){8}(?![A-Z0-9])|"
+    r"(?<![A-Z0-9])[A-Z]:[\\/]|\\\\[A-Z0-9_.-]+[\\/]|"
+    r"(?<![A-Z0-9.:/])/(?:home|Users|root)/[^\s/]+)"
+)
 
 
 def _assert_public_safe(value):
@@ -73,6 +82,8 @@ def _assert_public_safe(value):
     elif isinstance(value, str):
         if _SECRET_TEXT.search(value):
             raise ValueError("Possible credential in public annotation")
+        if _PRIVATE_PUBLIC_TEXT.search(value):
+            raise ValueError("Possible private contact or local path in public annotation")
         for match in _URL.finditer(value):
             parsed = urlsplit(match.group(0))
             if parsed.username or parsed.password or parsed.query or parsed.fragment:
