@@ -145,7 +145,10 @@ def render(d, synth, clean, timeline_path):
             elif upcoming.get("kind") == "backchannel":
                 anchor = upcoming["anchor_text"]
                 head = synth.line(anchor, voice)
-                tail = synth.line(content[len(anchor):].lstrip("，。；、, "), voice)
+                tail_text = content[len(anchor):].lstrip("，。；、,; ")
+                if tail_text.startswith(". "):
+                    tail_text = tail_text[2:].lstrip()
+                tail = synth.line(tail_text, voice)
                 boundary = start + len(head)
                 wave = np.concatenate((head, np.zeros(round(.08*SAMPLE_RATE),dtype=np.float32), tail))
             else:

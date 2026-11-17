@@ -72,6 +72,24 @@ def draft(language, mode, seed=15):
 
 
 class DialogueQualityTests(unittest.TestCase):
+    def test_english_sentence_boundary_is_not_sent_as_leading_tts_punctuation(self):
+        calls = []
+        class CaptureSynth(FakeSynth):
+            def line(self, content, voice, offset=0):
+                calls.append(content)
+                return super().line(content, voice, offset)
+        d = {"dialogue_id": "boundary", "profile": {"language": "en", "voice_assignments": {"assistant": "host", "user_01": "listener"}},
+             "turns": [{"turn_id": 0, "speaker": "assistant", "kind": "speech", "addressee": "user_01", "text": "Check the label. Then compare the rating.", "gap_before_ms": 0},
+                       {"turn_id": 1, "speaker": "user_01", "kind": "backchannel", "addressee": "assistant", "text": "Got it.", "anchor_text": "Check the label", "responds_to": [0], "gap_before_ms": 0}]}
+        with tempfile.TemporaryDirectory() as folder:
+            render(d, CaptureSynth(), Path(folder)/"clean.flac", Path(folder)/"timeline.json")
+        self.assertEqual(calls[:2], ["Check the label", "Then compare the rating."])
+        calls.clear()
+        d["turns"][0]["text"] = "Check the label, .5 is the measured value."
+        with tempfile.TemporaryDirectory() as folder:
+            render(d, CaptureSynth(), Path(folder)/"clean.flac", Path(folder)/"timeline.json")
+        self.assertEqual(calls[1], ".5 is the measured value.")
+
     def test_targeted_model_rewrite_remains_marked_for_review(self):
         data = draft("en", "direct")
         data["profile"]["targeted_safety_review"] = {"status": "rewritten", "turn_id": 1, "calls": 1}

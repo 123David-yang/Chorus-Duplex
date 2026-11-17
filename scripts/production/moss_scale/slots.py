@@ -246,6 +246,7 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
         instruction += (
             "LANGUAGE OVERRIDE: Write every spoken line in natural conversational English. "
             "The Chinese cues describe the scene and timing only. Use English punctuation. "
+            "Never put internal identifiers such as user_01, user_02, third_party_01 or turn numbers in spoken text. When recalling another person's words, use a natural reference or a previously established name; omit the identifier rather than reading it aloud. "
             "Direct questions and vocatives must match that turn's addressee. Refer to third parties indirectly unless they are the marked recipient. Use a name as a direct address only after it has been spoken and clearly linked to that recipient; otherwise omit it. "
             "The assistant gives suggestions only: never say it will buy, book, call, send messages, "
             "remind people later, or create and share documents. It may ask a person to do those things. "
@@ -339,7 +340,8 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
             head, tail = (x.strip() for x in wording)
             if form == "anchor":
                 head = head.rstrip("，。；、！？,.;!? ")
-                item["text"] = head + comma + tail
+                separator = ". " if language == "en" and tail[0].isupper() else comma
+                item["text"] = head + separator + tail
                 for index in range(i+1, len(slots)):
                     if slots[index]["kind"] != "backchannel":
                         break
