@@ -190,8 +190,21 @@ def plan_slots(users, events, group, repeat, group_interrupt, transition, handof
         else:
             speaker = rng.choice(users)
             add(speaker, "all", refs=[len(slots)-1], cue="按上下文补充细节、安排或不同意见。")
-    finish = add(first, "assistant", refs=[len(slots)-1], cue="确认接下来的安排。")
-    add("assistant", first, refs=[finish], cue="自然收束。")
+    finish = add(first, "assistant", refs=[len(slots)-1], cue="提出自己的下一步或保留意见，不代替其他人决定。")
+    add("assistant", first, refs=[finish], cue="依照已表达的态度自然收束，不宣布未经确认的全体决定。")
+    for index, slot in enumerate(slots):
+        if slot.get("interaction") != "choice_confirmation":
+            continue
+        outcome = slot.get("choice_outcome")
+        if outcome == "agreement":
+            state = "截至选择确认轮，两位参与者同意先试。" + ("其余人的态度根据之后发言更新。" if len(users) > 2 else "")
+        else:
+            state = "截至选择确认轮仍有分歧；根据之后发言更新。比较两个方案不代表都要实施。"
+        for following in slots[index + 1:]:
+            if following["speaker"] == "assistant" and "fixed_text" not in following:
+                following["cue"] += "写作背景，仅供理解，不要照读：" + state
+                following["cue"] += "先直接回答上一句的具体问题，再自然推进。"
+                break
     return slots
 
 
@@ -207,6 +220,7 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
         "自然例子：[‘我能赶上的最晚一班是……’,‘哦对，七点四十那班。’]。"
         "transition 第一段只写短附和，第二段用该轮指定的开场词，转折词只说一次。"
         "带 fixed_text 的轮次必须逐字使用给定台词，不能改变这些选项。"
+        "写作提示是给作者的上下文，不要将提示或规则本身照读成对话。"
         "不要读角色编号。关系设定只适用于人类角色，助手是语音助手。向助手说话时不要使用亲属称呼。"
         "助手只提供建议，不声称亲历、在场、已查询实时信息、替用户操作或发群消息。保持同一话题，对已经说出的信息作回应。"
         "助手没有定时提醒能力，不声称之后会主动提醒。"
@@ -216,9 +230,12 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
         "食品、过敏与健康建议要承接已知限制；缺少食材、设备或数量信息时，不要编造具体烹饪时长、批次或熟透保证。"
         "区分无添加糖和总糖、碳水；各人的限制不能换到别人身上。设备兼容先确认接口，别默认一定能用。"
         "卖家政策、退货期限和保修条件未知时，请先核实，不能猜具体天数；检查刀具或设备时不要建议直接用手接触刀刃。"
+        "已明确出现电器自动断电失灵、冒烟等故障时，先建议停止使用、安全可行时断电并请专业人员检查，不要继续试验。"
         "后续话轮推进尚未解决的事情，不要反复重新确定已明确的日期或安排。打断必须增加新的限制或纠正，而不是重复助手刚说过的内容。"
         "答应比较或解释时要实际推进，没空间展开就不要作该承诺；勿将需要加工的操作说成无需烹饪。"
-        "有人询问是否所有人都同意时，助手不能替尚未回应的人表态；应请他们自己确认。"
+        "逐人保持已表达的限制；如果某人的关键限制尚未解决或尚未同意，不能宣布全体已定，应请其确认。"
+        "不知道设备型号、接口或配件是否存在时，不能保证具体功能；二选一也不能无故改成两个都执行。"
+        "写完后检查是否真正回答提问、遵守约束和按说话顺序推进；拿不准时自然询问，而不是编造条件。"
         "示例：{\"0\":\"明天几点出发？\",\"1\":[\"第一班车七点开\",\"我们最好提前二十分钟到站。\"]}。"
     )
     if language == "en":
@@ -231,8 +248,11 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
             "Do not invent device-specific capacity, size, speed, or safety thresholds. "
             "Keep known allergies in view; don't invent cooking time or batch counts when food, equipment or quantity are unknown. "
             "Don't guess store return windows or warranties; suggest checking the seller's actual terms. Don't suggest touching blades. "
+            "For an explicitly malfunctioning electrical device, advise stopping use, isolating power when safe and seeking professional inspection. "
             "Move the conversation forward instead of reopening settled dates, and make interruptions add a genuinely new constraint. "
-            "When asked whether everyone agrees, do not speak for people who have not responded; invite them to confirm. "
+            "Do not declare a group decision while a person's stated constraint or agreement remains unconfirmed. "
+            "Do not promise device functions before checking the necessary equipment or turn an either/or choice into doing both. "
+            "Before returning JSON, check that each question is answered and each person's constraints remain consistent. "
             "Keep acknowledgements to one to six words. A transition starts with a short "
             "acknowledgement and puts the requested English pivot only in the second part. "
             "For a hesitation, make the first clause sound plausible if the listener stops hearing it midway. "

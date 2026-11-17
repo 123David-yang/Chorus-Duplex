@@ -18,7 +18,9 @@ from scripts.production.moss_scale.script import dialogue_id, generate, validate
 from scripts.production.moss_scale.slots import draft_from_slots, plan_slots, shorten_backchannel_prefix
 from scripts.text.quality import (ai_request_candidates, audit, repeated_incomplete_start,
                                   numeric_safety_advice_needs_review, prior_preference_conflict,
-                                  unsupported_assistant_action)
+                                  unsupported_assistant_action, possible_group_decision,
+                                  device_capability_needs_review, possible_two_option_plan,
+                                  microphone_answer_needs_review, electrical_fault_answer_needs_review)
 from scripts.text.simultaneous_choices import (ALTERNATE_CHOICES, CHOICE_OPTIONS, CHOICE_CONFIRMATIONS, choice_option_sets,
                                                generation_choice_option_sets, choice_request_texts,
                                                generation_choice_request_texts)
@@ -70,6 +72,29 @@ def draft(language, mode, seed=15):
 
 
 class DialogueQualityTests(unittest.TestCase):
+    def test_narrow_semantic_warnings_are_hints_not_rejections(self):
+        self.assertTrue(device_capability_needs_review("A headset jack covers listening and speaking."))
+        self.assertFalse(device_capability_needs_review("Check whether the headset has a microphone."))
+        self.assertTrue(possible_two_option_plan("我们只有一个锅，没法同时煮饭和煮面。", "那得按顺序来。"))
+        self.assertFalse(possible_two_option_plan("我们只有一个锅。", "先确认设备型号。"))
+        self.assertTrue(microphone_answer_needs_review("How do the microphones compare?", "A wired connection can be stable."))
+        self.assertFalse(microphone_answer_needs_review("How do the microphones compare?", "Check each microphone model first."))
+        faulty = "我的电水壶接触不太好，烧水时得用手按着。"
+        self.assertTrue(electrical_fault_answer_needs_review(faulty, "那你想买多大容量的？"))
+        self.assertFalse(electrical_fault_answer_needs_review(faulty, "建议先停用，安全时断电并请专业人员检查。"))
+        self.assertTrue(electrical_fault_answer_needs_review("The kettle won’t turn off.", "Don't unplug it."))
+        self.assertFalse(electrical_fault_answer_needs_review("The kettle has no smoke.", "What size is it?"))
+
+    def test_partial_agreement_does_not_automatically_prove_group_consensus(self):
+        self.assertTrue(possible_group_decision("Okay, that's settled—let's move on."))
+        self.assertFalse(possible_group_decision("Is that settled?"))
+        data = draft("en", "direct")
+        data["participants"].append({"id": "user_03", "persona": "friend", "style": "natural"})
+        data["turns"][-1]["text"] = "Okay, that's settled—let's move on."
+        result = audit(Dialogue.from_jsonl_line(json.dumps(data)))
+        self.assertIn("possible_group_consensus", [warning["code"] for warning in result["warnings"]])
+        self.assertTrue(result["passed"])  # A warning is not proof that the decision is invalid.
+
     def test_incomplete_needs_content_before_the_hesitation(self):
         for text in ("我想一下……", "嗯，那个……"):
             self.assertFalse(incomplete_has_content(text, "zh"))

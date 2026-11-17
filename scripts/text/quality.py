@@ -154,6 +154,49 @@ def numeric_safety_advice_needs_review(text: str) -> bool:
     return bool(re.search(number, text, re.I) and re.search(risk, text, re.I))
 
 
+def possible_group_decision(text):
+    """Identify wording worth reviewing; it does not establish whether consensus exists."""
+    text = text.replace("’", "'")
+    if "?" in text or "？" in text:
+        return False
+    pattern = (r"\b(?:that's settled|it's settled|everyone (?:agrees|has agreed)|"
+               r"we(?:'re| are) all agreed)\b|大家都(?:同意|决定)|全体(?:同意|决定)|"
+               r"就这么(?:定|决定)了")
+    return bool(re.search(pattern, text, re.I))
+
+
+def device_capability_needs_review(text):
+    device = r"headphones?|headset|earphones?|耳机|麦克风|话筒"
+    assertion = (r"listening and speaking|hear and speak|listen and (?:speak|talk)|"
+                 r"直接(?:接|通话|说话)|无需转接|不用转接")
+    return bool(re.search(device, text, re.I) and re.search(assertion, text, re.I))
+
+
+def possible_two_option_plan(previous, current):
+    simultaneous = r"(?:没法|不能|无法).*同时|(?:cannot|can't|can not).*\b(?:both|same time)\b"
+    sequential = r"按顺序|依次(?:做|进行)|一个接一个|one after (?:the other|another)|do both in (?:turn|sequence)"
+    return bool(re.search(simultaneous, previous, re.I) and re.search(sequential, current, re.I))
+
+
+def microphone_answer_needs_review(question, answer):
+    term = r"\b(?:mic|mics|microphone|microphones)\b|麦克风|话筒"
+    return bool(re.search(r"[?？]", question) and re.search(term, question, re.I)
+                and not re.search(term, answer, re.I))
+
+
+def electrical_fault_answer_needs_review(question, answer):
+    question = question.replace("’", "'")
+    answer = answer.replace("’", "'")
+    question = re.sub(r"(?:没有|没)冒烟|\b(?:no|not|isn't|is not)\s+(?:any\s+)?smok(?:e|ing)\b", "", question, flags=re.I)
+    answer = re.sub(r"\b(?:don't|do not|never)\s+(?:try to\s+)?(?:unplug|disconnect)\b|"
+                    r"(?:不要|别|不必)(?:自己)?断电", "", answer, flags=re.I)
+    device = r"水壶|插座|插头|电器|电线|kettle|socket|plug|appliance|wiring"
+    fault = r"跳不断|不自动断电|接触不良|接触不太好|得用手按|冒烟|火花|漏电|sparks?|smok(?:e|ing)|won't switch off|won't turn off"
+    safety = r"停用|停止使用|别再用|断电|专业|stop us(?:e|ing)|unplug|disconnect|electrician|professional"
+    return bool(re.search(device, question, re.I) and re.search(fault, question, re.I)
+                and not re.search(safety, answer, re.I))
+
+
 def ai_request_candidates(d):
     english_requests = re.compile(
         r"\b(?:can you|could you|would you|please|help (?:me|us)|tell me|show me|"
@@ -187,6 +230,7 @@ def audit(d: Dialogue, required: list[str] | None = None) -> dict:
         if len(identities) != len(set(identities)):
             flag("reused_speaker_voice", None, "spoken roles need distinct voice bindings")
     english = d.profile.get("language") == "en"
+    user_count = len({p.id for p in d.participants if p.id.startswith("user_")})
     host = None
     counts = {"barge_in": 0, "ai_backchannel": 0, "backchannel": 0, "interruption": 0}
     for i, t in enumerate(d.turns):
@@ -267,6 +311,26 @@ def audit(d: Dialogue, required: list[str] | None = None) -> dict:
         if t.speaker == "assistant" and numeric_safety_advice_needs_review(t.text):
             warnings.append({"code": "numeric_safety_advice_review", "turn_id": i,
                              "detail": "check whether the quantitative advice is supported by the context"})
+        if (t.speaker == "assistant" and user_count > 2 and possible_group_decision(t.text)
+                and any(previous.interaction == "choice_acknowledgement" for previous in d.turns[:i])):
+            warnings.append({"code": "possible_group_consensus", "turn_id": i,
+                             "detail": "check whether all relevant participants agreed or authorized the decision"})
+        if t.speaker == "assistant" and device_capability_needs_review(t.text):
+            warnings.append({"code": "device_capability_review", "turn_id": i,
+                             "detail": "check that the device, connector and microphone assumptions are supported"})
+        if (t.speaker == "assistant" and i > 0
+                and possible_two_option_plan(d.turns[i-1].text, t.text)
+                and any(previous.interaction == "choice_request" for previous in d.turns[:i])):
+            warnings.append({"code": "possible_two_option_plan", "turn_id": i,
+                             "detail": "check whether both options were actually intended to be carried out"})
+        if (t.speaker == "assistant" and i > 0 and d.turns[i-1].speaker.startswith("user_")
+                and microphone_answer_needs_review(d.turns[i-1].text, t.text)):
+            warnings.append({"code": "possible_unanswered_microphone_question", "turn_id": i,
+                             "detail": "check whether the response actually addresses the microphone question"})
+        if (t.speaker == "assistant" and i > 0 and d.turns[i-1].speaker.startswith("user_")
+                and electrical_fault_answer_needs_review(d.turns[i-1].text, t.text)):
+            warnings.append({"code": "electrical_fault_safety_review", "turn_id": i,
+                             "detail": "check whether the explicit electrical fault was addressed safely"})
         if t.kind == "backchannel":
             counts["backchannel"] += 1
             if host is None:
