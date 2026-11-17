@@ -1,17 +1,54 @@
 """Draft and validate a dialogue before synthesis."""
+import hashlib
 import json
+import os
 import random
+import re
 
 from scripts.config import TOPIC_DOMAINS
 from scripts.text.oneshot_agent.lexicon import load_bank
+from scripts.text.quality import unsupported_assistant_action
+from scripts.text.simultaneous_choices import (
+    CHOICE_CONFIRMATIONS, CHOICE_RESOLUTIONS, CONFLICTING_CHOICES, CONFLICT_CLARIFICATIONS,
+    choice_option_sets, choice_request_text, choice_setup_text,
+)
 from scripts.text.utils.llm import chat
-from scripts.text.voices import gender_of, reference_voices, voices_for_dialogue
+from scripts.text.voices import gender_of, reference_voices, voice_bindings_snapshot, voices_for_dialogue
 
+from .slots import EN_TRANSITION_PIVOTS, TRANSITION_PIVOTS, draft_from_slots, plan_slots
 from .storage import atomic_json
 
 
 SELF_RESUME_PAUSE_MS = (500, 2000)
 HANDOFF_PAUSE_MS = (2500, 3200)
+EN_TOPICS = ("travel plans", "home maintenance", "work coordination", "meal planning",
+             "local events", "pet care", "technology", "shopping", "study plans",
+             "community projects", "outdoor activities", "family logistics")
+EN_BACKCHANNELS = ("Right", "Makes sense", "Got it", "Exactly", "I see", "That's fair")
+SCENE_SEEDS = (
+    ("当面商量", "in-person planning"),
+    ("线上语音", "voice call"),
+    ("边做事边聊", "chatting while working"),
+    ("临出门确认安排", "last-minute coordination"),
+    ("社区活动布置现场", "setting up a community event"),
+    ("共享工位旁交接事项", "handing over tasks at a shared workspace"),
+    ("等车时临时改行程", "replanning while waiting for a ride"),
+    ("志愿活动结束后收拾器材", "packing up after volunteering"),
+    ("楼下碰面取还东西", "meeting downstairs to return borrowed items"),
+    ("排练或训练中途休息", "taking a break during rehearsal or practice"),
+)
+
+
+def dialogue_id(index, language="zh", backend=None):
+    backend = backend or os.environ.get("TTS_BACKEND", "moss_onnx")
+    if backend == "moss_onnx":
+        name = "moss"
+    elif backend in ("qwen3", "kokoro"):
+        name = backend
+    else:
+        name = "custom-" + hashlib.sha256(backend.encode("utf-8")).hexdigest()[:12]
+    prefix = f"{name}-scale-en-20261115" if language == "en" else f"{name}-scale-20261115"
+    return f"{prefix}-{index:06d}"
 
 
 def incomplete_pause_range(turn):
@@ -42,118 +79,121 @@ def shorten_backchannels(draft):
         turns[int(index)]["text"] = text.strip()
 
 
-def generate(index, root):
-    ident = f"moss-scale-20261115-{index:06d}"
+def apply_rule_quality(draft):
+    """Evaluate inexpensive structural rules; semantic and audio quality need separate review."""
+    from scripts.text.quality import audit
+    from scripts.text.utils.schema import Dialogue
+
+    report = audit(Dialogue.from_jsonl_line(json.dumps(draft, ensure_ascii=False)))
+    if not report["passed"]:
+        codes = sorted({issue["code"] for issue in report["issues"]})
+        raise ValueError("Dialogue failed deterministic quality rules: " + ", ".join(codes))
+    draft["profile"]["rule_quality"] = {
+        "version": report["version"], "scores": report["rule_scores"], "scope": report["score_scope"],
+        "warnings": [{"code": item["code"], "turn_id": item["turn_id"]} for item in report["warnings"]],
+    }
+
+
+def generate(index, root, mode="direct", language="zh"):
+    backend = os.environ.get("TTS_BACKEND", "moss_onnx")
+    ident = dialogue_id(index, language, backend=backend)
     path = root / "scripts" / f"{ident}.json"
     if path.exists():
         draft = json.loads(path.read_text(encoding="utf-8"))
+        profile = draft.get("profile", {})
+        if profile.get("tts_backend", "moss_onnx") != backend:
+            raise ValueError("Cached dialogue uses a different TTS backend; use a separate output root.")
+        bindings = profile.get("voice_bindings")
+        if bindings is None:
+            if os.environ.get("VOICE_REGISTRY"):
+                raise ValueError("Cached dialogue has no voice bindings; use a separate output root with this registry.")
+        elif bindings != voice_bindings_snapshot(profile["voice_assignments"].values()):
+            raise ValueError("Voice bindings changed since this dialogue was drafted; use the original registry.")
         for turn in draft["turns"]:
             if turn["kind"] == "incomplete":
                 low, high = incomplete_pause_range(turn)
-                if not low <= turn["pause_ms"] <= high:
+                if type(turn.get("pause_ms")) is not int or not low <= turn["pause_ms"] <= high:
                     turn["pause_ms"] = random.Random(f"{ident}-{turn['turn_id']}-pause").randint(low, high)
+        apply_rule_quality(draft)
         return draft
     rng = random.Random(index + 20261115)
     count = 3 if index == 0 else rng.choices(range(1, 7), [1, 3, 3, 3, 2, 1])[0]
     users = [f"user_{n:02d}" for n in range(1, count + 1)]
     mapping = voices_for_dialogue(ident, count)
-    turns = rng.choice([16, 20, 24, 28])
+    turns = rng.choice([14, 16, 18, 20])
     events = [kind for kind, probability in (
-        ("incomplete", .40), ("backchannel", .60), ("interruption", .27), ("side_talk", .25)
+        ("incomplete", .70), ("backchannel", .95), ("interruption", .66), ("side_talk", .55)
     ) if rng.random() < probability]
+    if len(events) < 3:
+        remaining = [kind for kind in ("backchannel", "interruption", "incomplete", "side_talk")
+                     if kind not in events]
+        events.extend(rng.sample(remaining, 3 - len(events)))
     if index == 0:
         events = ["incomplete", "backchannel"]
     listener_rng = random.Random(f"{ident}-listener-sequence")
     simultaneous = index == 0 or (count >= 2 and listener_rng.random() < .5)
     repeat_listener = not simultaneous and (count == 1 or listener_rng.random() < .4)
-    group = "backchannel" in events and (index == 0 or rng.random() < .35)
-    group_interrupt = count >= 2 and "interruption" in events and rng.random() < .35
+    group = "backchannel" in events and (index == 0 or rng.random() < .68)
+    group_interrupt = count >= 2 and "interruption" in events and rng.random() < .45
     backchannel_to_interruption = "interruption" in events and not group_interrupt and random.Random(
         f"{ident}-backchannel-to-interruption"
     ).random() < .30
     hesitation_handoff = index != 0 and "incomplete" in events and random.Random(
         f"{ident}-hesitation-handoff"
     ).random() < .25
-    system = (
-        "生成自然中文多人对话，只返回 JSON：setting、topic、participants、turns。"
-        "participants 只列正式用户，每项 id、persona、style。"
-        "turns 每项 speaker、text、addressee、kind、responds_to；引用用从0开始的过去轮次编号数组，首轮用[]。示例：{\"speaker\":\"user_01\",\"text\":\"咱们几点走？\",\"addressee\":\"assistant\",\"kind\":\"speech\",\"responds_to\":[]}。"
-        "对话前中后各安排至少一轮 assistant 的实质发言，不编造助手的生活经历；写口语，每轮最多两句。"
-        "回应实际求助。只用请求中的事件，普通轮次用 speech。严格按请求轮数写，允许相差2轮。"
-    )
-    event_rules = {
-        "incomplete": "未说完后同一人续说。parts 为两个非空片段，直接拼起来等于 text，第一段不能是完整句。",
-        "backchannel": "紧跟 speech 主轮，只引用并面向主轮说话人。anchor_text 逐字复制已说完的事实前缀，后面至少剩8字。附和是2–14字短反馈，不加观点。",
-        "interruption": "单人打断引用并面向紧邻的 speech。被打断轮只写来得及说出的半句，打断内容回应已听到的信息。",
-        "side_talk": "第三方用 third_party_01，置于中段，先与正式用户交流再回主线，不列入 participants。",
+    simultaneous_requests = count >= 2 and random.Random(
+        f"{ident}-simultaneous-requests"
+    ).random() < .15
+    topics = EN_TOPICS if language == "en" else TOPIC_DOMAINS
+    relationships = ["neighbors", "coworkers", "old friends", "family", "temporary teammates"] if language == "en" else ["邻居", "同事", "老朋友", "家人", "临时组队"]
+    scene = rng.choice(SCENE_SEEDS)[int(language == "en")]
+    context = {
+        "领域": topics[index % len(topics)],
+        "关系": rng.choice(relationships),
+        "场景": scene,
+        "用户音色": {u: gender_of(mapping[u]) for u in users},
     }
-    if hesitation_handoff:
-        event_rules["incomplete"] = (
-            "犹豫接话：用户想法未说完便停住，不能用完整问句加省略号冒充。标记 kind=incomplete，resolution=assistant_handoff。"
-            "下一轮是面向该用户的 assistant speech，只引用这一轮。助手温和提议，依据已听到的内容，静音由程序生成。"
-        )
-    if events:
-        system += "\n" + "\n".join(event_rules[event] for event in events)
+    planned_events = events.copy()
+    if index and not simultaneous_requests and "backchannel" in events and turns >= 16 and rng.random() < .65:
+        planned_events.append("backchannel")
+    if simultaneous_requests:
+        planned_events.append("simultaneous_requests")
+    slots = plan_slots(users, planned_events, group, repeat_listener, group_interrupt,
+                       backchannel_to_interruption, hesitation_handoff, rng, turns, language,
+                       topic=context["领域"])
+    seeds = []
     if "backchannel" in events or backchannel_to_interruption:
-        pool = list(dict.fromkeys(
-            entry["text"] for entry in load_bank()
-            if entry["type"] in {"ack", "receipt", "empathy"} and 2 <= len(entry["text"]) <= 10
+        bank = EN_BACKCHANNELS if language == "en" else list(dict.fromkeys(
+            row["text"] for row in load_bank()
+            if row["type"] in {"ack", "receipt", "empathy"} and 2 <= len(row["text"]) <= 10
         ))
-        seeds = random.Random(f"{ident}-backchannel-seeds").sample(pool, min(4, len(pool)))
-        system += "\n附和措辞参考（按语境变化）：" + "、".join(seeds)
-    if group:
-        listeners = "同一用户分两次" if repeat_listener else "两位不同用户各一次"
-        system += f"\n附和组：{listeners}。两条紧随助手主轮，用同一个 anchor_text、responds_to 和 addressee=assistant。"
-    if group_interrupt:
-        system += "\n同时打断须写成连续三轮：assistant speech → 用户A interruption → 用户B interruption。后两轮 addressee=assistant，responds_to 都是同一个助手轮索引，B 不引用 A。"
-    if backchannel_to_interruption:
-        system += (
-            "\n附和转打断：先写一轮 assistant speech，紧跟一轮用户 interruption。用户只引用该助手轮，addressee=assistant，先简短认同，再用不过、但是或等一下提出补充。"
-            "backchannel_prefix 逐字复制该用户 text 开头的认同，只写2–14字。"
-        )
-    request = {
-        "领域": TOPIC_DOMAINS[index % len(TOPIC_DOMAINS)],
-        "关系": rng.choice(["邻居", "同事", "老朋友", "家人", "临时组队"]),
-        "场景": rng.choice(["当面商量", "线上语音", "边做事边聊", "临出门确认安排"]),
-        "轮数": turns, "用户及音色性别": {u: gender_of(mapping[u]) for u in users},
-        "必须各自有实际台词的 speaker": users + ["assistant"], "助手实际发言次数": "3到5轮", "本条事件": events, "对助手安排一组附和": group, "安排一次两人同时抢话": group_interrupt, "安排一次附和转打断": backchannel_to_interruption,
-    }
+        seeds = random.Random(f"{ident}-backchannel-seeds").sample(bank, min(4, len(bank)))
+    options = dict(hesitation_handoff=hesitation_handoff,
+                   backchannel_to_interruption=backchannel_to_interruption,
+                   sequential_backchannels=not simultaneous, repeat_listener=repeat_listener, language=language,
+                   simultaneous_requests=simultaneous_requests)
     for attempt in range(2):
-        raw = ""
+        d = None
         try:
-            raw = chat(system, json.dumps(request, ensure_ascii=False, separators=(",", ":")),
-                       temperature=.85 if attempt == 0 else .65, max_tokens=7000, json_output=True)
-            d = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
-            for turn in d["turns"]:
-                refs = turn.get("responds_to")
-                if refs is None:
-                    turn["responds_to"] = []
-                elif type(refs) is int:
-                    turn["responds_to"] = [refs]
-                if turn.get("resolution") == "assistant_handoff":
-                    turn["parts"] = [turn["text"]]
+            d = draft_from_slots(slots, users, context, mode, seeds, language)
             try:
-                validate(
-                    d, users, events, group, group_interrupt, hesitation_handoff=hesitation_handoff,
-                    backchannel_to_interruption=backchannel_to_interruption,
-                    sequential_backchannels=not simultaneous, repeat_listener=repeat_listener,
-                )
+                validate(d, users, events, group, group_interrupt, **options)
             except BackchannelTooLong:
+                if language == "en":
+                    raise
                 shorten_backchannels(d)
-                validate(
-                    d, users, events, group, group_interrupt, hesitation_handoff=hesitation_handoff,
-                    backchannel_to_interruption=backchannel_to_interruption,
-                    sequential_backchannels=not simultaneous, repeat_listener=repeat_listener,
-                )
+                validate(d, users, events, group, group_interrupt, **options)
             break
         except (ValueError, KeyError, TypeError) as exc:
-            (root/"staging"/f"{ident}-text-reject-{attempt}.txt").write_text(raw,encoding="utf-8")
-            request["本次修正要求"] = f"重新生成一段完整剧本，解决：{exc}"
-            if attempt == 1:
+            atomic_json(root/"staging"/f"{ident}-planned-reject-{attempt}.json",
+                        {"error":str(exc), "draft":d})
+            context["上次问题"] = str(exc)
+            if attempt:
                 raise
     d.update(dialogue_id=ident, scenario="side_talk" if "side_talk" in events else "multi_qa")
     for i, t in enumerate(d["turns"]):
-        t.update(turn_id=i, gap_before_ms=-350 if t["kind"]=="interruption" else rng.randint(140, 320),
+        overlapping = t["kind"] == "interruption" or t.get("overlap_with") is not None
+        t.update(turn_id=i, gap_before_ms=-350 if overlapping else rng.randint(140, 320),
                  insert_ratio=None, events=[], trigger="cue" if t["speaker"]=="assistant" else None)
         if t["kind"] == "incomplete":
             t["pause_ms"] = rng.randint(*incomplete_pause_range(t))
@@ -162,24 +202,31 @@ def generate(index, root):
     spoken = {t["speaker"] for t in d["turns"]}
     voices = {k:v for k,v in mapping.items() if k in spoken}
     refs = reference_voices()
-    d["profile"] = {"generator":"moss_scale_v1","tts_backend":"moss_onnx","voice_assignments":voices,
+    d["profile"] = {"generator":"moss_scale_v1","tts_backend":backend,"voice_assignments":voices,
+                    "voice_bindings":voice_bindings_snapshot(voices.values()),
                     "voice_references":{v:{k:refs[v][k] for k in ("source_url","license","sha256")}
                                         for v in voices.values() if v in refs},
-                    "topic_domain":request["领域"],"requested_events":events,
+                    "topic_domain":context["领域"],"requested_events":events,
+                    "draft_mode":mode,
                     "listener_spacing_ms":0 if simultaneous else rng.randint(90, 180),
                     "listener_sequence":"simultaneous" if simultaneous else "sequential",
                     "requested_backchannel_group": group,
                     "requested_repeat_listener": group and repeat_listener,
                     "requested_simultaneous_interruption": group_interrupt,
                     "requested_hesitation_handoff": hesitation_handoff,
-                    "requested_backchannel_transition": backchannel_to_interruption}
+                    "requested_backchannel_transition": backchannel_to_interruption,
+                    "requested_simultaneous_requests": simultaneous_requests}
+    if language == "en":
+        d["profile"]["language"] = "en"
+    apply_rule_quality(d)
     atomic_json(path, d)
     return d
 
 
 def validate(
     d, users, events, group, group_interrupt=False, *, hesitation_handoff=False,
-    backchannel_to_interruption=False, sequential_backchannels=False, repeat_listener=False,
+    backchannel_to_interruption=False, sequential_backchannels=False, repeat_listener=False, language="zh",
+    simultaneous_requests=False,
 ):
     turns = d["turns"]
     allowed = set(users) | {"assistant", "third_party_01"}
@@ -205,17 +252,91 @@ def validate(
     interrupt_group = False
     handoffs = 0
     transitions = 0
+    simultaneous_pairs = 0
     interrupters = set()
     for i, t in enumerate(turns):
         speaker, kind, content = t["speaker"], t["kind"], t["text"]
         refs = t["responds_to"]
         targets = t["addressee"] if isinstance(t["addressee"], list) else [t["addressee"]]
-        if (speaker not in allowed or not isinstance(content,str) or not content.strip() or len(content)>190
+        if (speaker not in allowed or not isinstance(content,str) or not content.strip() or len(content)>(360 if language=="en" else 190)
             or not targets or any(a not in allowed | {"third_party","all","none"} or a==speaker for a in targets)
             or not isinstance(refs,list) or any(type(j) is not int or not 0<=j<i for j in refs)):
             raise ValueError(f"第{i}轮角色、文本、指向或回应索引无效")
+        if language == "en" and (not re.search(r"[A-Za-z]", content) or re.search(r"[\u3400-\u9fff]", content)):
+            raise ValueError(f"Turn {i} must be in English")
+        if re.search(r"(?<![A-Za-z])(?:user|third_party)_\d{2}(?![A-Za-z0-9_])", content):
+            raise ValueError(f"第{i}轮台词出现内部角色编号")
+        if targets == ["assistant"] and re.match(
+            r"^\s*(?:爸|妈|爸爸|妈妈|爹|娘|爷爷|奶奶|外公|外婆|哥哥|姐姐|弟弟|妹妹)[，,：:！!]",
+            content,
+        ):
+            raise ValueError(f"第{i}轮把语音助手称作亲属")
+        if speaker == "assistant" and re.search(r"我家(?:有|里|的)|我带(?:一|两)(?:袋|包|瓶).*过去", content):
+            raise ValueError(f"第{i}轮助手把自己写成现实中的在场者")
+        if speaker == "assistant" and unsupported_assistant_action(content):
+            raise ValueError(f"第{i}轮助手声称会执行现实或外部操作")
         if (speaker=="third_party_01") != (kind=="side_talk"):
             raise ValueError("第三方须标作 side_talk")
+        interaction = t.get("interaction")
+        if interaction not in (None, "choice_request", "choice_setup", "simultaneous_requests", "conflict_clarification",
+                               "choice_resolution", "choice_confirmation"):
+            raise ValueError("未知对话交互类型")
+        if t.get("overlap_with") is not None:
+            other = t["overlap_with"]
+            if (not simultaneous_requests or type(other) is not int or other != i - 1 or other < 0
+                or kind != "speech" or speaker not in users or targets != ["assistant"]
+                or interaction != "simultaneous_requests"):
+                raise ValueError("同时请求须由两名用户同时向助手发出")
+            first = turns[other]
+            if (first["speaker"] not in users or first["speaker"] == speaker or first["kind"] != "speech"
+                or first["addressee"] not in ("assistant", ["assistant"])
+                or first.get("interaction") != "simultaneous_requests"
+                or first["responds_to"] != refs or refs != [other - 1]
+                or other < 1 or turns[other-1]["speaker"] != "assistant"):
+                raise ValueError("同时请求须相互独立地基于共同的对话历史")
+            setup = turns[other-1]
+            choices = setup.get("choice_options")
+            permitted_choices = [list(pair) for pair in choice_option_sets(language, d["topic"])]
+            if (setup.get("interaction") != "choice_setup" or choices not in permitted_choices
+                or setup["text"] != choice_setup_text(language, choices)):
+                raise ValueError("同时请求前的助手须明确提出该话题的两个具体选项")
+            request = turns[other-2] if other >= 2 else {}
+            if (request.get("interaction") != "choice_request" or request.get("speaker") not in users
+                or request.get("addressee") not in ("assistant", ["assistant"])
+                or request.get("choice_options") != choices
+                or request.get("text") != choice_request_text(language, choices)
+                or setup["responds_to"] != [other-2]):
+                raise ValueError("助手提出选项之前须先回应用户的选项请求")
+            indices = (first.get("choice_index"), t.get("choice_index"))
+            if any(type(index) is not int for index in indices) or set(indices) != {0, 1}:
+                raise ValueError("同时请求须分别选择两个不同选项")
+            pair = (first["text"], content) if indices == (0, 1) else (content, first["text"])
+            if pair not in CONFLICTING_CHOICES[language]:
+                raise ValueError("同时请求台词必须与对应的选项一致")
+            following = turns[i+1] if i+1 < len(turns) else {}
+            if (following.get("speaker") != "assistant" or following.get("kind") != "speech"
+                or following.get("responds_to") != [other, i]
+                or following.get("interaction") != "conflict_clarification"
+                or following.get("text") not in CONFLICT_CLARIFICATIONS[language]):
+                raise ValueError("助手须在两次同时请求之后澄清")
+            resolution = turns[i+2] if i+2 < len(turns) else {}
+            selected = resolution.get("choice_index")
+            previous_choice = first["choice_index"] if resolution.get("speaker") == first["speaker"] else t["choice_index"]
+            if (resolution.get("speaker") not in (first["speaker"], speaker)
+                or resolution.get("addressee") not in ("assistant", ["assistant"])
+                or resolution.get("kind") != "speech" or resolution.get("responds_to") != [i+1]
+                or resolution.get("interaction") != "choice_resolution"
+                or type(selected) is not int or selected != previous_choice
+                or resolution.get("text") not in CHOICE_RESOLUTIONS[language][selected]):
+                raise ValueError("用户须在澄清后明确选择一个已列出的方案")
+            confirmation = turns[i+3] if i+3 < len(turns) else {}
+            if (confirmation.get("speaker") != "assistant" or confirmation.get("kind") != "speech"
+                or confirmation.get("responds_to") != [i+2]
+                or confirmation.get("interaction") != "choice_confirmation"
+                or confirmation.get("addressee") not in (resolution["speaker"], [resolution["speaker"]])
+                or confirmation.get("text") not in CHOICE_CONFIRMATIONS[language]):
+                raise ValueError("助手须确认用户的选择并基于此提供建议")
+            simultaneous_pairs += 1
         resolution = t.get("resolution")
         if resolution is not None and (kind != "incomplete" or resolution != "assistant_handoff"):
             raise ValueError("未识别的话轮 resolution")
@@ -238,12 +359,17 @@ def validate(
         if "backchannel_prefix" in t:
             prefix = t["backchannel_prefix"]
             if (not backchannel_to_interruption or kind != "interruption" or speaker not in users
-                or not isinstance(prefix, str) or not 2 <= len(prefix) <= 14
+                or not isinstance(prefix, str) or not 2 <= len(prefix) <= (40 if language=="en" else 14)
                 or not content.startswith(prefix) or refs != [i-1]
                 or turns[i-1]["speaker"] != "assistant"):
                 raise ValueError("附和转打断需要用户在同一轮先短附和，并引用上一轮助手")
             pivot = content[len(prefix):].lstrip(" ，,。；;、：:…")
-            if not any(pivot.startswith(word) and pivot[len(word):].strip(" ，,。！？") for word in ("不过", "但是", "等一下")):
+            if language == "en":
+                valid_pivot = any(re.match(re.escape(word) + r"\b[ ,.!?—]*\w", pivot, re.IGNORECASE)
+                                  for word in EN_TRANSITION_PIVOTS)
+            else:
+                valid_pivot = any(pivot.startswith(word) and pivot[len(word):].strip(" ，,。！？") for word in TRANSITION_PIVOTS)
+            if not valid_pivot:
                 raise ValueError("附和转打断需要在短附和后用转折词提出具体补充")
             transitions += 1
         if kind=="backchannel":
@@ -254,7 +380,7 @@ def validate(
                 or not isinstance(anchor,str) or not anchor.strip() or not turns[host]["text"].startswith(anchor)
                 or (listeners and anchor!=turns[i-1]["anchor_text"])):
                 raise ValueError(f"第{i}轮附和须引用同一主轮和原文前缀，同时附和须由不同用户发出")
-            if len(content) > 14:
+            if (len(content.split()) > 6 if language == "en" else len(content) > 14):
                 raise BackchannelTooLong(f"第{i}轮附和 text 过长，最多14字符。请改为简短反馈。")
             if len(turns[host]["text"]) - len(anchor) < 8:
                 raise ValueError(f"第{i}轮附和锚点太晚，主轮在 anchor_text 之后必须至少还剩8字符。")
@@ -290,3 +416,5 @@ def validate(
         raise ValueError("剧本需要恰好一处附和转打断")
     if group_interrupt and not interrupt_group:
         raise ValueError("缺少两名不同用户抢同一个话轮")
+    if simultaneous_pairs != int(simultaneous_requests):
+        raise ValueError("同时请求事件数量与计划不符")

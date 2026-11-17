@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 import importlib
+import math
 import os
 import re
 import sys
@@ -35,22 +36,36 @@ def prepare_reference(path: str | Path, target_sr: int, target_channels: int) ->
         data=np.repeat(data.mean(axis=1,keepdims=True),target_channels,axis=1)
     return np.ascontiguousarray(data.T[None,:,:],dtype=np.float32)
 
-def moss_synthesis_text(text):
+def moss_synthesis_text(text, language="zh"):
     # A terminal boundary helps the autoregressive model end short replies instead of continuing.
     # No lexical content is inserted, and interrupted half-sentences retain their dash.
     stripped=text.rstrip()
-    return stripped+"。" if stripped and stripped[-1].isalnum() else text
+    if not stripped or not stripped[-1].isalnum():
+        return text
+    return stripped + ("." if language == "en" else "。")
 
 class MossOnnxBackend:
-    capabilities={"cpu":True,"voice_cloning":True,"reference_text_required":False}
+    capabilities={"cpu":True,"gpu":True,"voice_cloning":True,"reference_text_required":False}
     def __init__(self, tmp: Path):
         from scripts.config import MOSS_DIR
         sys.path.insert(0,os.environ.get("MOSS_DIR",str(MOSS_DIR)))
-        from onnx_tts_runtime import OnnxTtsRuntime
         import soundfile as sf
         self.sf=sf; self.tmp=tmp
         opts={"thread_count":int(os.environ.get("TTS_THREADS","4"))}
+        device = os.environ.get("TTS_DEVICE", "cpu").lower()
+        if device in ("cuda", "cuda:0", "gpu"):
+            # ORT can load CUDA/cuDNN libraries from an installed compatible runtime.
+            # This must happen before the MOSS sessions are created.
+            import onnxruntime as ort
+            if hasattr(ort, "preload_dlls"):
+                ort.preload_dlls()
+            opts["execution_provider"] = "cuda"
+        elif device != "cpu":
+            raise ValueError("MOSS ONNX device must be cpu or cuda:0")
+        from onnx_tts_runtime import OnnxTtsRuntime
+        portable=Path(r"D:\DuplexVoice_resources\models\moss-tts-nano-onnx")
         if os.environ.get("MOSS_MODEL_DIR"):opts["model_dir"]=os.environ["MOSS_MODEL_DIR"]
+        elif portable.is_dir():opts["model_dir"]=str(portable)
         class PortableOnnxRuntime(OnnxTtsRuntime):
             def _load_reference_audio(self, reference_audio_path):
                 # Local upstream fork still had tensor-only calls on a numpy waveform.
@@ -65,14 +80,16 @@ class MossOnnxBackend:
                 return self._reference_code_cache[key]
         self.model_dir=Path(opts.get("model_dir",Path(os.environ.get("MOSS_DIR",str(MOSS_DIR)))/"models"))
         self.runtime=PortableOnnxRuntime(**opts)
+        if device != "cpu" and getattr(self.runtime, "execution_provider", None) != "cuda":
+            raise RuntimeError("MOSS CUDA was requested but the runtime did not select CUDA")
         cc=self.runtime.codec_meta["codec_config"]
         self.fps=int(cc["sample_rate"])/int(cc["downsample_rate"])
         self.max_frames=int(self.runtime.manifest["generation_defaults"]["max_new_frames"])
         import onnxruntime
-        self.runtime_provenance={"engine":"moss_onnx","onnxruntime":onnxruntime.__version__,"native_sample_rate":int(cc["sample_rate"]),"native_channels":int(cc["channels"]),"sample_mode":"fixed","request_seed":int(os.environ.get("MOSS_SEED","1234"))}
+        self.runtime_provenance={"engine":"moss_onnx","onnxruntime":onnxruntime.__version__,"execution_provider":"cuda" if device != "cpu" else "cpu","native_sample_rate":int(cc["sample_rate"]),"native_channels":int(cc["channels"]),"sample_mode":"fixed","request_seed":int(os.environ.get("MOSS_SEED","1234"))}
     def synthesize(self,text,voice,reference_audio,max_seconds):
         cap=max(1,min(self.max_frames,round(max_seconds*self.fps)))
-        spoken=moss_synthesis_text(text)
+        spoken=moss_synthesis_text(text, os.environ.get("MOSS_TEXT_LANGUAGE", "zh"))
         res=self.runtime.synthesize(text=spoken,voice=voice if not reference_audio else None,
             prompt_audio_path=reference_audio,output_audio_path=str(self.tmp),
             sample_mode="fixed",do_sample=False,seed=int(os.environ.get("MOSS_SEED","1234")),enable_wetext=False,
@@ -83,36 +100,80 @@ class MossOnnxBackend:
         return AudioResult(audio,sr,exhausted,provenance={**self.runtime_provenance,"voice":voice,"voice_cloning":bool(reference_audio),"request_seed":int(os.environ.get("MOSS_SEED","1234")),"source_text":text,"synthesized_text":spoken,"terminal_punctuation_added":spoken!=text,"generation_frame_cap_per_chunk":cap,"generated_frames":len(res.get("audio_token_ids",[]))})
 
 class QwenBackend:
-    """Optional larger model; no import/download until explicitly selected.
-    Use voice clone x-vector-only mode so reference transcripts are not required.
-    Install qwen-tts and select TTS_DEVICE=cpu/cuda:0 on the deployment host.
-    """
+    """Qwen preset and clone models, loaded lazily when a voice needs each model."""
     capabilities={"cpu":True,"gpu":True,"voice_cloning":True,"reference_text_required":False}
     def __init__(self,tmp:Path):
         import torch
         from qwen_tts import Qwen3TTSModel
-        device=os.environ.get("TTS_DEVICE","cpu")
-        self.model=Qwen3TTSModel.from_pretrained(
-            os.environ.get("TTS_MODEL","Qwen/Qwen3-TTS-12Hz-0.6B-Base"),
-            device_map=device,dtype=torch.float32 if device=="cpu" else torch.bfloat16,
-            attn_implementation="eager")
+        self.device=os.environ.get("TTS_DEVICE","cpu").lower()
+        if self.device != "cpu" and not re.fullmatch(r"cuda(?::[0-9]+)?", self.device):
+            raise ValueError("Qwen device must be cpu or cuda[:index]")
+        if self.device.startswith("cuda") and not torch.cuda.is_available():
+            raise RuntimeError("Qwen CUDA was requested but CUDA is unavailable")
+        self.torch=torch
+        self.factory=Qwen3TTSModel
+        self.models={}
         self.prompts={}
+
+    def _model(self, kind):
+        if kind not in self.models:
+            if kind == "clone":
+                name=os.environ.get("TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-Base")
+            else:
+                name=os.environ.get("QWEN_PRESET_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice")
+            self.models[kind]=self.factory.from_pretrained(
+                name, device_map=self.device,
+                dtype=self.torch.float32 if self.device=="cpu" else self.torch.float16,
+                attn_implementation="eager")
+        return self.models[kind]
+
     def synthesize(self,text,voice,reference_audio,max_seconds):
-        if not reference_audio: raise ValueError("Qwen clone backend requires a reference voice manifest")
-        # Cache conditioning once per reference; do not reload models per turn.
-        if reference_audio not in self.prompts:
-            self.prompts[reference_audio]=self.model.create_voice_clone_prompt(
-                ref_audio=reference_audio,x_vector_only_mode=True)
-        waves,sr=self.model.generate_voice_clone(text=text,language="Chinese",
-            voice_clone_prompt=self.prompts[reference_audio])
-        return AudioResult(np.asarray(waves[0],dtype=np.float32),int(sr))
+        language = os.environ.get("MOSS_TEXT_LANGUAGE", "zh")
+        if language not in ("zh", "en"):
+            raise ValueError("Qwen language must be zh or en")
+        language = {"zh": "Chinese", "en": "English"}[language]
+        if not math.isfinite(max_seconds) or max_seconds <= 0:
+            raise ValueError("Qwen max_seconds must be positive and finite")
+        model=self._model("clone" if reference_audio else "preset")
+        try:
+            config=model.model.speech_tokenizer.config
+            fps=float(config.output_sample_rate) / float(config.decode_upsample_rate)
+        except (AttributeError, TypeError, ValueError, ZeroDivisionError):
+            raise ValueError("Qwen speech tokenizer does not expose a valid codec frame rate") from None
+        if not math.isfinite(fps) or fps <= 0:
+            raise ValueError("Qwen codec frame rate must be positive and finite")
+        max_tokens=max(1, math.ceil(max_seconds * fps))
+        if reference_audio:
+            path=Path(reference_audio).resolve()
+            key=(str(path), path.stat().st_mtime_ns, path.stat().st_size)
+            if key not in self.prompts:
+                self.prompts[key]=model.create_voice_clone_prompt(
+                    ref_audio=str(path),x_vector_only_mode=True)
+            waves,sr=model.generate_voice_clone(text=text,language=language,
+                voice_clone_prompt=self.prompts[key],max_new_tokens=max_tokens)
+        else:
+            waves,sr=model.generate_custom_voice(text=text,language=language,speaker=voice,
+                                                max_new_tokens=max_tokens)
+        samples=np.asarray(waves[0],dtype=np.float32)
+        rate=int(sr)
+        if rate <= 0:
+            raise ValueError("Qwen returned an invalid sample rate")
+        # The high-level API returns audio without an EOS flag. A waveform within
+        # two codec frames of the limit is conservatively treated as truncated.
+        truncated=len(samples)/rate >= max(0, (max_tokens - 2)/fps)
+        return AudioResult(samples,rate,truncated,
+                           provenance={"engine":"qwen3","voice":voice,
+                                       "voice_cloning":bool(reference_audio),
+                                       "language":language,"device":self.device,
+                                       "codec_frames_per_second":fps,"max_new_tokens":max_tokens,
+                                       "truncation_detection":"duration_near_token_limit"})
 
 class KokoroBackend:
     """Chinese/English sherpa ONNX backend; presets only, native 24kHz."""
     capabilities={"cpu":True,"voice_cloning":False,"native_sample_rate":24000}
     def __init__(self,tmp:Path):
         import sherpa_onnx
-        folder=Path(os.environ.get("KOKORO_MODEL_DIR","resources/models/kokoro-multi-lang-v1_1"))
+        folder=Path(os.environ.get("KOKORO_MODEL_DIR",r"D:\DuplexVoice_resources\models\kokoro-multi-lang-v1_1"))
         self.model_dir=folder
         model_name="model.onnx" if (folder/"model.onnx").is_file() else "model.int8.onnx"
         required=[model_name,"voices.bin","tokens.txt","lexicon-us-en.txt","lexicon-zh.txt"]
@@ -156,18 +217,44 @@ class KokoroBackend:
             generated=self.engine.generate(text=text,sid=sid,speed=speed)
         return AudioResult(np.asarray(generated.samples,dtype=np.float32),int(generated.sample_rate),provenance=provenance)
 
+class RegistryBackend:
+    """Resolve registered preset aliases while keeping model-specific logic in each backend."""
+    def __init__(self, backend):
+        from scripts.text.voices import voice_bindings_snapshot, voice_registry
+        self.backend = backend
+        self.bindings = voice_bindings_snapshot(voice_registry()["voices"])
+
+    def __getattr__(self, name):
+        return getattr(self.backend, name)
+
+    def synthesize(self, text, voice, reference_audio, max_seconds):
+        from scripts.text.voices import preset_for_voice, voice_bindings_snapshot
+        if voice_bindings_snapshot([voice]).get(voice) != self.bindings.get(voice):
+            raise ValueError(f"Registered voice changed during synthesis: {voice}")
+        return self.backend.synthesize(text, preset_for_voice(voice), reference_audio, max_seconds)
+
 
 def create_backend(tmp:Path) -> TTSBackend:
     name=os.environ.get("TTS_BACKEND","moss_onnx")
-    if name=="moss_onnx": return MossOnnxBackend(tmp)
-    if name=="qwen3": return QwenBackend(tmp)
-    if name=="kokoro":
+    if name=="moss_onnx":
+        backend = MossOnnxBackend(tmp)
+    elif name=="qwen3":
+        backend = QwenBackend(tmp)
+    elif name=="kokoro":
+        if os.environ.get("TTS_DEVICE", "cpu").lower() != "cpu":
+            raise ValueError("Kokoro uses CPU here; configure OpenVINO device separately")
         engine=os.environ.get("KOKORO_ENGINE","onnxruntime")
         if engine=="openvino":
             from .kokoro_openvino import OpenVINOKokoroBackend
-            return OpenVINOKokoroBackend(tmp)
-        if engine!="onnxruntime":raise ValueError("KOKORO_ENGINE must be onnxruntime or openvino")
-        return KokoroBackend(tmp)
-    if ":" not in name: raise ValueError("TTS_BACKEND: moss_onnx, qwen3, or module:factory")
-    module,factory=name.split(":",1)
-    return getattr(importlib.import_module(module),factory)(tmp)
+            backend = OpenVINOKokoroBackend(tmp)
+        elif engine=="onnxruntime":
+            backend = KokoroBackend(tmp)
+        else:
+            raise ValueError("KOKORO_ENGINE must be onnxruntime or openvino")
+    else:
+        if ":" not in name: raise ValueError("TTS_BACKEND: moss_onnx, qwen3, kokoro, or module:factory")
+        module,factory=name.split(":",1)
+        backend = getattr(importlib.import_module(module),factory)(tmp)
+    if os.environ.get("VOICE_REGISTRY"):
+        return RegistryBackend(backend)
+    return backend

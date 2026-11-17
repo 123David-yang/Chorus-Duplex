@@ -1,12 +1,12 @@
-# ChorusDuplex（和声·双工）· 中文多人全双工语音对话
+# Chorus-Duplex（和声·双工）· 中英文多人全双工语音对话
 
-[![GitHub](https://img.shields.io/badge/GitHub-ChorusDuplex-181717?logo=github&logoColor=white)](https://github.com/123David-yang/ChorusDuplex) [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Dataset-FFD21E?logo=huggingface&logoColor=FFD21E)](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk)
+[![GitHub](https://img.shields.io/badge/GitHub-Chorus-Duplex-181717?logo=github&logoColor=white)](https://github.com/123David-yang/Chorus-Duplex) [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Dataset-FFD21E?logo=huggingface&logoColor=FFD21E)](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex)
 
-[English](README.md) · **简体中文** · [数据集与音频试听](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk)
+[English](README.md) · **简体中文** · [数据集与音频试听](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex)
 
-ChorusDuplex 构建多位说话人与语音助手共同参与的普通话合成对话。它记录谁在说、对谁说、回应哪一句，以及助手何时该开口、何时该听。每条对话配对交付干声和背景人声版本，并附上剧本与根据合成音频得到的时间线。
+Chorus-Duplex 构建多位说话人与语音助手共同参与的中英文合成对话。它记录谁在说、对谁说、回应哪一句，以及助手何时该开口、何时该听。每条对话配对交付干声和背景人声版本，并附上剧本与根据合成音频得到的时间线。
 
-[完整对话：犹豫接话](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-hesitation-handoff.mp3) · [连续附和](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-sequential-backchannels.mp3) · [同时附和](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-simultaneous-backchannels.mp3) · [同时打断](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-simultaneous-interruption.mp3) · [附和转打断](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-backchannel-to-interruption.mp3)
+[完整对话：犹豫接话](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex/blob/main/demos/nov16-hesitation-handoff.mp3) · [连续附和](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex/blob/main/demos/nov16-sequential-backchannels.mp3) · [同时附和](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex/blob/main/demos/nov16-simultaneous-backchannels.mp3) · [同时打断](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex/blob/main/demos/nov16-simultaneous-interruption.mp3) · [附和转打断](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex/blob/main/demos/nov16-backchannel-to-interruption.mp3)
 
 ## 参与框架与发言指向
 
@@ -32,6 +32,7 @@ ChorusDuplex 构建多位说话人与语音助手共同参与的普通话合成�
 | 连续附和 | 同一用户或不同用户先后开口，下一句等上一句说完。 |
 | 打断 `interruption` | 一位说话人在对方话轮结束前抢话，回应已听到的内容。 |
 | 多人同时打断 | 两位用户打断同一话轮。 |
+| 同时提出不同选择 | 多人同时表达不同选项；助手听完后请求澄清。 |
 | 附和转打断 | 用户先短暂附和，助手继续说。用户转到「不过」「但是」或「等一下」时，助手停止。再次打断助手的新话轮，另记一个事件。 |
 | 第三方插话 `side_talk` | 第三方短暂参与插曲，随后恢复主线。第三方话轮单独标注。 |
 
@@ -41,7 +42,7 @@ ChorusDuplex 构建多位说话人与语音助手共同参与的普通话合成�
 
 [Full-Duplex-Bench v1.0 和 v1.5](https://github.com/kevinhu-nv/Full-Duplex-Bench-NV/blob/main/dataset/README.md) 是以一位主要用户和助手为中心的双工评测集，部分重叠评测含其他人声。[MultiTalkFT](https://huggingface.co/datasets/MultiTalk/MultiTalkFT) 是开放的中英多人双工训练语料，提供按说话人分轨的音频与词级时间对齐。[MultiTalk 论文](https://arxiv.org/html/2609.36903v1)
 
-| 特征 | Full-Duplex-Bench | MultiTalkFT | ChorusDuplex |
+| 特征 | Full-Duplex-Bench | MultiTalkFT | Chorus-Duplex |
 | --- | :---: | :---: | :---: |
 | 多人主对话 | ✗ | ✓ | ✓ |
 | 第三方交流 | ✓ | — | ✓ |
@@ -84,15 +85,15 @@ audio/
 
 ## 用 CLI 运行
 
-使用 Python 3.11 或更新版本。
+CPU 依赖组合已在 Python 3.12 下验证。
 
 ```bash
-git clone https://github.com/123David-yang/ChorusDuplex.git
-cd ChorusDuplex
-python -m pip install -r requirements.txt
+git clone https://github.com/123David-yang/Chorus-Duplex.git
+cd Chorus-Duplex
+python -m pip install -r requirements-moss.txt
 ```
 
-在同一个 Python 环境里，按所用 MOSS 运行时版本的说明安装依赖。本仓库的 `requirements.txt` 列的是 ChorusDuplex 链路依赖。如果所用的 MOSS 代码会导入 PyTorch 或 torchaudio，即便用 CPU 推理，也要安装对应的兼容包。[MOSS ONNX 安装说明](https://github.com/OpenMOSS/MOSS-TTS-Nano#onnx-cpu-inference)
+在同一个 Python 环境里，按所用 MOSS 运行时版本的说明安装依赖。本仓库的 `requirements-moss.txt` 列出已验证的 CPU 链路依赖。如果所用的 MOSS 代码会导入 PyTorch 或 torchaudio，即便用 CPU 推理，也要安装对应的兼容包。[MOSS ONNX 安装说明](https://github.com/OpenMOSS/MOSS-TTS-Nano#onnx-cpu-inference)
 
 下载 [TTS 权重](https://huggingface.co/OpenMOSS-Team/MOSS-TTS-Nano-100M-ONNX)和[音频分词器权重](https://huggingface.co/OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX)。把 `MOSS_MODEL_DIR` 指向它们的共同父目录，里面应有 `MOSS-TTS-Nano-100M-ONNX/` 和 `MOSS-Audio-Tokenizer-Nano-ONNX/`，保留各目录中的相对路径及文件名。
 
@@ -111,6 +112,10 @@ python -m scripts.production.scale_moss --help
 python -m scripts.production.scale_moss --check
 python -m scripts.production.scale_moss --root output/moss --hours 0.05
 ```
+
+已测试的 CUDA 运行使用了适配过的 MOSS ONNX 运行时；官方原版运行时在全新环境下仍需进一步验证。使用 GPU 时需安装与 CUDA 匹配的 ONNX Runtime GPU 版本，替代 CPU 版本，并按上游说明安装运行时依赖。
+
+生成英文时加 `--language en`；CUDA 环境配置完成后可选择 `--tts-backend moss_onnx --tts-device cuda`。多 TTS 后端、固定助手音色与参考音色见[音色配置说明](scripts/sound/TTS.md)。
 
 `--check` 仅核对本地输入，无需加载模型或调用 API。最后一条命令的目标是至少三分钟有效音频。续跑使用同一个 `--root`，程序按完成记录跳过已交付条目。
 
@@ -134,7 +139,7 @@ import json
 import soundfile as sf
 from huggingface_hub import hf_hub_download
 
-REPO = "BiggestWave/ChorusDuplex-SideTalk"
+REPO = "BiggestWave/Chorus-Duplex"
 
 
 def fetch(path):
@@ -157,7 +162,7 @@ print(timeline[0]["speaker"], timeline[0]["start_sec"], timeline[0]["end_sec"])
 
 ## 数据限制与素材来源
 
-数据是合成普通话。生成时检查剧本结构、音频时序、TTS 截断和文件格式。当前 CLI 未接入 ASR。已开放的音频、试听和来源详见数据集卡片。[Hugging Face 数据集](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk)
+数据是中英文合成对话。生成时检查剧本结构、音频时序、TTS 截断和文件格式。当前 CLI 未接入 ASR。已开放的音频、试听和来源详见数据集卡片。[Hugging Face 数据集](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex)
 
 背景素材来自 SRI International / Lab41, In-Q-Tel 的 VOiCES，适用 CC BY 4.0。分发混音时请保留署名。使用音色参考录音时，请确保有相应使用权，并在清单中保留来源和许可。[VOiCES 语料](https://registry.opendata.aws/lab41-voices/)
 
@@ -165,4 +170,4 @@ print(timeline[0]["speaker"], timeline[0]["start_sec"], timeline[0]["end_sec"])
 
 ## 数据引用
 
-使用数据时，请引用 Hugging Face 数据卡中的 [BibTeX 条目](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk#citation)。
+使用数据时，请引用 Hugging Face 数据卡中的 [BibTeX 条目](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex#citation)。

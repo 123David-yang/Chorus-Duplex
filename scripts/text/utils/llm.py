@@ -2,14 +2,44 @@
 from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
+import http.client
 import json
 import os
+import socket
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 _CALL_LOG = ContextVar("llm_call_log", default=None)
+
+
+def _origin(url: str) -> tuple[str, str, int]:
+    parsed = urllib.parse.urlsplit(url)
+    scheme = parsed.scheme.lower()
+    if scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError("Invalid LLM endpoint URL")
+    try:
+        port = parsed.port
+    except ValueError:
+        raise ValueError("Invalid LLM endpoint URL") from None
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return scheme, parsed.hostname.lower(), port
+
+
+class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Keep the LLM authorization header on its original origin."""
+
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        try:
+            allowed = _origin(request.full_url) == _origin(newurl)
+        except ValueError:
+            allowed = False
+        if not allowed:
+            raise RuntimeError("LLM request blocked a cross-origin redirect") from None
+        return super().redirect_request(request, fp, code, msg, headers, newurl)
+
 
 @contextmanager
 def capture_calls():
@@ -41,8 +71,23 @@ def chat(system: str,user: str,temperature: float=1.0,max_tokens: int=512, *, js
         body = json.dumps(payload).encode("utf-8")
         req=urllib.request.Request(f"{base.rstrip('/')}/chat/completions",data=body,
             headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"},method="POST")
-        with urllib.request.urlopen(req,timeout=120) as response:
-            data=json.loads(response.read().decode("utf-8"))
+        opener = urllib.request.build_opener(_SameOriginRedirectHandler())
+        for attempt in range(2):
+            try:
+                with opener.open(req, timeout=120) as response:
+                    data=json.loads(response.read().decode("utf-8"))
+                break
+            except urllib.error.HTTPError:
+                raise
+            except urllib.error.URLError as exc:
+                # DNS and connection refusal occur before the service receives a request.
+                if not attempt and isinstance(exc.reason, (socket.gaierror, ConnectionRefusedError)):
+                    time.sleep(.5)
+                    continue
+                raise RuntimeError("LLM network request failed") from None
+            except http.client.IncompleteRead:
+                # The provider may have processed this paid request; avoid sending it twice.
+                raise RuntimeError("LLM response was incomplete") from None
         choice=data["choices"][0]
         content=choice["message"]["content"]
         if not isinstance(content,str) or not content.strip(): raise ValueError("Empty model response")

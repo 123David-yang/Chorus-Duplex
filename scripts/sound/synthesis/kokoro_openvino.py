@@ -12,7 +12,7 @@ class OpenVINOKokoroBackend:
     capabilities={"cpu":True,"voice_cloning":False,"native_sample_rate":24000}
     def __init__(self,tmp):
         import openvino as ov
-        folder=Path(os.environ.get("KOKORO_MODEL_DIR","resources/models/kokoro-vectorized-v1_1"));self.model_dir=folder
+        folder=Path(os.environ.get("KOKORO_MODEL_DIR",r"D:\DuplexVoice_resources\models\kokoro-vectorized-v1_1"));self.model_dir=folder
         path=folder/"model.onnx"
         with path.open("rb") as stream:sha=hashlib.file_digest(stream,"sha256").hexdigest()
         if sha!="523b595681c7e4c7b9797a166f0971df63ec06b005e936339693bb461f871d64":raise ValueError("Unqualified OpenVINO Kokoro graph; use the pinned vectorized model")
@@ -20,7 +20,7 @@ class OpenVINOKokoroBackend:
         device=os.environ.get("KOKORO_DEVICE","CPU")
         if device!="CPU":raise ValueError("Only the CPU path is currently qualified; GPU remains an isolated experiment")
         core=ov.Core();model=core.read_model(path);model.reshape({"tokens":ov.PartialShape([1,ov.Dimension(3,511)])})
-        cache=Path(os.environ.get("KOKORO_OV_CACHE_DIR","output/openvino-cache"));cache.mkdir(parents=True,exist_ok=True)
+        cache=Path(os.environ.get("KOKORO_OV_CACHE_DIR",r"D:\DuplexVoice_resources\openvino-cache"));cache.mkdir(parents=True,exist_ok=True)
         self.engine=core.compile_model(model,"CPU",{"PERFORMANCE_HINT":"LATENCY","INFERENCE_PRECISION_HINT":"f32","INFERENCE_NUM_THREADS":int(os.environ.get("TTS_THREADS","4")),"CACHE_DIR":str(cache)})
         self.runtime_provenance={"engine":"openvino","version":ov.__version__,"execution_devices":self.engine.get_property("EXECUTION_DEVICES"),"precision_hint":"f32","token_length_bounds":[3,511],"model_sha256":sha}
         self.voices=np.memmap(folder/"voices.bin",dtype="<f4",mode="r",shape=(103,510,256))

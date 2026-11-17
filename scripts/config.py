@@ -16,14 +16,17 @@ OUTPUT_DIR = ROOT / "output"
 ANNOTATIONS_DIR = ROOT / "data" / "annotations"   # ① text  产物
 AUDIO_DIR = ROOT / "output" / "audio"             # ② audio 产物（逐条对话 wav）
 BG_POOL_DIR = ROOT / "output" / "bg_pool"         # ③ bg    产物（旧：预拼接池；新流程改直接读素材即时拼接）
-BG_SOURCE_DIR = Path(os.environ.get(
-    "BG_SOURCE_DIR", str(ROOT / "data" / "voices_babble")))  # 外部背景素材根（rm1~4/babb/），不落副本
+_local_bg = Path("D:/DuplexVoice_downloads/VOICES_babble/data") if os.name == "nt" else Path("/mnt/d/DuplexVoice_downloads/VOICES_babble/data")
+_default_bg = _local_bg if _local_bg.is_dir() else ROOT / "data" / "voices_babble"
+BG_SOURCE_DIR = Path(os.environ.get("BG_SOURCE_DIR", str(_default_bg)))  # 外部背景素材根（rm1~4/babb/）
 MIXED_DIR = ROOT / "output" / "mixed"             # ④ mix   产物（成品 + 背景轨）
 LOGS_DIR = Path(os.environ.get("DUPLEX_LOGS_DIR", str(ROOT / "logs")))
 
 # 外部依赖
-MOSS_DIR = Path(os.environ.get("MOSS_DIR", str(ROOT / "external" / "moss-tts-nano")))
-VAD_MODEL = Path(os.environ.get("VAD_MODEL", ROOT / "scripts" / "sound" / "models" / "silero_vad.onnx"))
+_local_moss = Path("D:/Project_Vibe/moss-tts-official")
+_default_moss = _local_moss if os.name == "nt" and _local_moss.is_dir() else ROOT / "external" / "moss-tts-nano"
+MOSS_DIR = Path(os.environ.get("MOSS_DIR", str(_default_moss)))
+VAD_MODEL = Path(os.environ.get("VAD_MODEL", str(ROOT / "scripts" / "sound" / "models" / "silero_vad.onnx")))
 
 # 运行记录（所有 stage 共用；断点续传的状态依据 = 产物文件本身，此日志用于追溯）
 RUN_LOG = LOGS_DIR / "run.jsonl"

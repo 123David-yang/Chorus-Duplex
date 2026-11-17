@@ -3,7 +3,7 @@
 v2 升级点（双工时序）：
 - Turn.turn_id：轮次 id（0 起，序列化时按顺序自动赋值）
 - Turn.gap_before_ms：与上一轮的间隔（ms），负值 = 提前开口（重叠/打断/附和）
-- Turn.kind：speech / backchannel / interruption / side_talk
+- Turn.kind：speech / backchannel / interruption / side_talk / incomplete
   （side_talk = 非正式成员（第三方，speaker 为 third_party_NN）实际发声的轮，正常拼接，仅作标记）
 - Turn.responds_to：回应/综合了哪几轮（综合回复标注）
 - Turn.addressee：支持列表（一句话指向多人）
@@ -59,6 +59,14 @@ class Turn:
     trigger: str | None = None      # 仅 assistant 轮：cue / volunteer / invited / coordinate
     parts: list[str] | None = None  # incomplete: spoken fragments
     pause_ms: int | None = None    # incomplete: silence between fragments
+    resolution: str | None = None
+    side_talk_entry: str | None = None
+    backchannel_prefix: str | None = None
+    backchannel_gap_ms: int | None = None
+    interaction: str | None = None
+    overlap_with: int | None = None
+    choice_options: list[str] | None = None
+    choice_index: int | None = None
 
 
 @dataclass
@@ -84,10 +92,11 @@ class Dialogue:
         d = asdict(self)
         for i, t in enumerate(d["turns"]):
             t["turn_id"] = i  # 契约保证：turn_id 恒等于轮序（0 起）
-            if t["parts"] is None:
-                t.pop("parts")
-            if t["pause_ms"] is None:
-                t.pop("pause_ms")
+            for key in ("parts", "pause_ms", "resolution", "side_talk_entry",
+                        "backchannel_prefix", "backchannel_gap_ms", "interaction", "overlap_with",
+                        "choice_options", "choice_index"):
+                if t[key] is None:
+                    t.pop(key)
         return json.dumps(d, ensure_ascii=False)
 
     @staticmethod

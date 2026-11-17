@@ -103,7 +103,7 @@ def generate_planned(dialogue_id,scenario,num_users,turns,profile,persona_pool):
             "你只填写每个槽位对应的台词；不是逐角色交互。assistant 是 AI，不能编造个人生活经历。"
             "只输出 JSON 对象，含 setting、topic、participants（只列指定数量的用户）、utterances。"
             'participants 必须是对象数组，如 [{"id":"user_01","persona":"具体人设","style":"说话风格"}]，不能是 ID 字符串数组。'
-            'utterances 格式如 [{"turn_id":0,"text":"实际台词"}, ...]，必须填写全部槽位。'
+            'utterances 格式如 [{"turn_id":0,"text":"实际台词"}, ...]，必须填写全部槽位。' 
             "utterances 必须按槽位顺序，长度相等；每项含 turn_id、text。"
             "每条 backchannel 还必须给 anchor_text：逐字复制宿主从开头到一个已完整陈述事实的小句的前缀（含标点）。"
             "anchor_text 至少3字，宿主后面必须还剩至少6字；该前缀说完就足以支撑附和，不能引用尚未说出的结论。"

@@ -1,0 +1,122 @@
+"""Verified choices and utterances for overlapping user requests."""
+
+CHOICE_OPTIONS = {
+    "zh": {
+        "家庭日常": ("周六打扫", "周日打扫"),
+        "饮食与生活": ("做面条", "做米饭"),
+        "职场办公": ("上午开会", "下午开会"),
+        "旅行出行": ("坐高铁", "坐大巴"),
+        "教育学习": ("先复习词汇", "先复习语法"),
+        "消费购物": ("选小号", "选大号"),
+        "娱乐影视": ("看电影", "看纪录片"),
+        "邻里社区": ("周六组织活动", "周日组织活动"),
+        "运动健身": ("上午锻炼", "下午锻炼"),
+        "科技数码": ("买笔记本电脑", "买平板电脑"),
+        "理财生活": ("按月储蓄", "按季度储蓄"),
+        "宠物": ("上午带宠物去检查", "下午带宠物去检查"),
+        "家居装修": ("把墙刷成白色", "把墙刷成浅灰色"),
+        "节庆聚会": ("在家聚会", "在餐厅聚会"),
+        "兴趣爱好": ("先练习画画", "先练习摄影"),
+    },
+    "en": {
+        "travel plans": ("take the train", "take the bus"),
+        "home maintenance": ("paint the room white", "paint it light gray"),
+        "work coordination": ("meet in the morning", "meet in the afternoon"),
+        "meal planning": ("make noodles", "make rice"),
+        "local events": ("meet on Saturday", "meet on Sunday"),
+        "pet care": ("visit the vet in the morning", "visit the vet in the afternoon"),
+        "technology": ("buy a laptop", "buy a tablet"),
+        "shopping": ("buy the small size", "buy the large size"),
+        "study plans": ("review vocabulary first", "review grammar first"),
+        "community projects": ("hold the event on Saturday", "hold the event on Sunday"),
+        "outdoor activities": ("go hiking on Saturday", "go hiking on Sunday"),
+        "family logistics": ("clean the house on Saturday", "clean the house on Sunday"),
+    },
+}
+DEFAULT_CHOICES = {
+    "zh": ("上午安排", "下午安排"),
+    "en": ("schedule it in the morning", "schedule it in the afternoon"),
+}
+ALTERNATE_CHOICES = {
+    "zh": {
+        "家庭日常": ("周六整理衣柜", "周日整理衣柜"),
+        "饮食与生活": ("早餐喝牛奶", "早餐喝豆浆"),
+        "职场办公": ("周一提交报告", "周二提交报告"),
+        "旅行出行": ("坐飞机", "坐火车"),
+        "教育学习": ("先做阅读练习", "先做听力练习"),
+        "消费购物": ("在网上购买", "去实体店购买"),
+        "娱乐影视": ("看喜剧片", "看科幻片"),
+        "邻里社区": ("把活动安排在上午", "把活动安排在下午"),
+        "运动健身": ("周六去跑步", "周日去跑步"),
+        "科技数码": ("买有线耳机", "买无线耳机"),
+        "理财生活": ("储蓄收入的百分之十", "储蓄收入的百分之二十"),
+        "宠物": ("周六给宠物洗澡", "周日给宠物洗澡"),
+        "家居装修": ("客厅装暖色灯", "客厅装冷色灯"),
+        "节庆聚会": ("聚餐吃火锅", "聚餐吃烧烤"),
+        "兴趣爱好": ("先学习吉他", "先学习钢琴"),
+    },
+    "en": {
+        "travel plans": ("take a flight", "take the train"),
+        "home maintenance": ("install warm lights", "install cool lights"),
+        "work coordination": ("submit the report on Monday", "submit the report on Tuesday"),
+        "meal planning": ("have milk for breakfast", "have soy milk for breakfast"),
+        "local events": ("hold the event in the morning", "hold the event in the afternoon"),
+        "pet care": ("wash the pet on Saturday", "wash the pet on Sunday"),
+        "technology": ("buy wired headphones", "buy wireless headphones"),
+        "shopping": ("buy it online", "buy it in a store"),
+        "study plans": ("practice reading first", "practice listening first"),
+        "community projects": ("hold the meeting in the morning", "hold the meeting in the afternoon"),
+        "outdoor activities": ("go running on Saturday", "go running on Sunday"),
+        "family logistics": ("organize the closet on Saturday", "organize the closet on Sunday"),
+    },
+}
+
+
+def choice_option_sets(language, topic):
+    first = CHOICE_OPTIONS[language].get(topic, DEFAULT_CHOICES[language])
+    second = ALTERNATE_CHOICES[language].get(topic, DEFAULT_CHOICES[language])
+    return (first, second)
+
+
+def choice_setup_text(language, choices):
+    if language == "en":
+        return "Which option does each of you prefer?"
+    return "你们各自更倾向哪一个？"
+
+
+def choice_request_text(language, choices):
+    if language == "en":
+        return f"Can you help us choose whether to {choices[0]} or {choices[1]}?"
+    return f"我们{choices[0]}还是{choices[1]}，你能帮我们选一下吗？"
+
+
+CONFLICTING_CHOICES = {
+    "zh": (
+        ("我选第一个。", "我更喜欢第二个。"),
+        ("我觉得第一个更合适。", "我想选第二个。"),
+        ("第一个对我来说比较好。", "第二个比较适合我。"),
+        ("我倾向第一个方案。", "我倾向第二个方案。"),
+    ),
+    "en": (
+        ("I prefer the first option.", "I'd choose the second one."),
+        ("Let's go with the first one.", "The second option works better for me."),
+        ("I vote for option one.", "I'd rather pick option two."),
+        ("The first choice suits me.", "I prefer the second choice."),
+    ),
+}
+CONFLICT_CLARIFICATIONS = {
+    "zh": ("我听到了两个不同的选择，你们想选哪一个？", "你们想选的不一样，我们先确定用哪个方案？"),
+    "en": ("I heard two different preferences. Which option should we choose?",
+           "You prefer different options. Which one would you like to go with?"),
+}
+CHOICE_RESOLUTIONS = {
+    "zh": (("那就按第一个方案吧。", "好，我选第一个。"),
+           ("那就按第二个方案吧。", "好，我选第二个。")),
+    "en": (("Let's go with the first option.", "I'll choose the first one."),
+           ("Let's go with the second option.", "I'll choose the second one.")),
+}
+CHOICE_CONFIRMATIONS = {
+    "zh": ("好，我就按照你选择的方案给出建议。", "明白，我会基于你选的方案提供建议。"),
+    "en": ("Got it. I'll base my suggestions on the option you chose.",
+           "Okay, I'll give suggestions based on your choice."),
+}

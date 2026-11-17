@@ -275,3 +275,4 @@ def build_dialogue(script: dict, dialogue_id: str, scenario: str,
     if not report["passed"]:
         return None, fixes + [str(row) for row in report["issues"]]
     return d, fixes
+

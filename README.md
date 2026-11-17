@@ -1,12 +1,12 @@
-# ChorusDuplex — Multi-party full-duplex Mandarin dialogue
+# Chorus-Duplex — Multi-party full-duplex Chinese and English dialogue
 
-[![GitHub](https://img.shields.io/badge/GitHub-ChorusDuplex-181717?logo=github&logoColor=white)](https://github.com/123David-yang/ChorusDuplex) [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Dataset-FFD21E?logo=huggingface&logoColor=FFD21E)](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk)
+[![GitHub](https://img.shields.io/badge/GitHub-Chorus-Duplex-181717?logo=github&logoColor=white)](https://github.com/123David-yang/Chorus-Duplex) [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Dataset-FFD21E?logo=huggingface&logoColor=FFD21E)](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex)
 
-**English** · [简体中文](README.zh-CN.md) · [Dataset and audio demos](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk)
+**English** · [简体中文](README.zh-CN.md) · [Dataset and audio demos](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex)
 
-ChorusDuplex builds synthetic Mandarin conversations between a voice assistant and multiple people. It captures who is talking, whom they are addressing, what prompted each reply, and when an assistant should speak or listen. Each delivery pairs clean audio with a background-speech version and includes a script and the timing measured from the rendered audio.
+Chorus-Duplex builds synthetic Chinese and English conversations between a voice assistant and multiple people. It captures who is talking, whom they are addressing, what prompted each reply, and when an assistant should speak or listen. Each delivery pairs clean audio with a background-speech version and includes a script and the timing measured from the rendered audio.
 
-[Complete dialogue: hesitation handoff](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-hesitation-handoff.mp3) · [Sequential backchannels](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-sequential-backchannels.mp3) · [Simultaneous backchannels](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-simultaneous-backchannels.mp3) · [Simultaneous interruption](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-simultaneous-interruption.mp3) · [Backchannel-to-interruption](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk/blob/main/demos/nov16-backchannel-to-interruption.mp3)
+[Complete dialogue: hesitation handoff](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex/blob/main/demos/nov16-hesitation-handoff.mp3) · [Sequential backchannels](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex/blob/main/demos/nov16-sequential-backchannels.mp3) · [Simultaneous backchannels](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex/blob/main/demos/nov16-simultaneous-backchannels.mp3) · [Simultaneous interruption](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex/blob/main/demos/nov16-simultaneous-interruption.mp3) · [Backchannel-to-interruption](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex/blob/main/demos/nov16-backchannel-to-interruption.mp3)
 
 ## Participation and addressees
 
@@ -32,6 +32,7 @@ These are design targets. They also cover newcomers, turn coordination and groun
 | Sequential backchannels | One or more listeners take turns, each waiting for the previous acknowledgement to end. |
 | Interruption, `interruption` | A speaker takes the floor during an unfinished turn, reacting to something already audible. |
 | Simultaneous interruptions | Two users interrupt the same turn. |
+| Simultaneous conflicting requests | Two people request different choices at once; the assistant waits, then asks for clarification. |
 | Backchannel-to-interruption | A user starts with a brief acknowledgement while the assistant keeps speaking. The assistant stops at a pivot such as “but” or “wait.” Each new interrupted turn counts as a separate event. |
 | Third-party speech, `side_talk` | A third party speaks briefly in a side exchange before the participants return to the main thread. |
 
@@ -41,7 +42,7 @@ These are design targets. They also cover newcomers, turn coordination and groun
 
 [Full-Duplex-Bench v1.0 and v1.5](https://github.com/kevinhu-nv/Full-Duplex-Bench-NV/blob/main/dataset/README.md) provide evaluation cases centred on one focal user and a model, with additional voices in some overlap tests. [MultiTalkFT](https://huggingface.co/datasets/MultiTalk/MultiTalkFT) is an English–Mandarin multi-speaker training corpus with per-speaker audio and word-level timing. [MultiTalk paper](https://arxiv.org/html/2609.36903v1)
 
-| Feature | Full-Duplex-Bench | MultiTalkFT | ChorusDuplex |
+| Feature | Full-Duplex-Bench | MultiTalkFT | Chorus-Duplex |
 | --- | :---: | :---: | :---: |
 | Multi-party dialogue | ✗ | ✓ | ✓ |
 | Third-party exchange | ✓ | — | ✓ |
@@ -84,15 +85,15 @@ Both versions are 48 kHz stereo. Users and third parties are on the left, and th
 
 ## Run locally
 
-Use Python 3.11 or newer.
+The CPU dependency set has been tested with Python 3.12.
 
 ```bash
-git clone https://github.com/123David-yang/ChorusDuplex.git
-cd ChorusDuplex
-python -m pip install -r requirements.txt
+git clone https://github.com/123David-yang/Chorus-Duplex.git
+cd Chorus-Duplex
+python -m pip install -r requirements-moss.txt
 ```
 
-Install the MOSS runtime's dependencies in the same Python environment using the instructions for the checkout you use. This repository's `requirements.txt` covers the ChorusDuplex pipeline. A MOSS checkout that imports PyTorch or torchaudio also needs compatible packages, even when inference runs on CPU. [MOSS ONNX setup](https://github.com/OpenMOSS/MOSS-TTS-Nano#onnx-cpu-inference)
+Install the MOSS runtime's dependencies in the same Python environment using the instructions for the checkout you use. The pinned `requirements-moss.txt` covers the tested CPU pipeline. A MOSS checkout that imports PyTorch or torchaudio also needs compatible packages, even when inference runs on CPU. [MOSS ONNX setup](https://github.com/OpenMOSS/MOSS-TTS-Nano#onnx-cpu-inference)
 
 Download the [TTS weights](https://huggingface.co/OpenMOSS-Team/MOSS-TTS-Nano-100M-ONNX) and [audio tokenizer weights](https://huggingface.co/OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX). Set `MOSS_MODEL_DIR` to their shared parent, containing `MOSS-TTS-Nano-100M-ONNX/` and `MOSS-Audio-Tokenizer-Nano-ONNX/`. Keep the relative filenames within each directory.
 
@@ -111,6 +112,10 @@ python -m scripts.production.scale_moss --help
 python -m scripts.production.scale_moss --check
 python -m scripts.production.scale_moss --root output/moss --hours 0.05
 ```
+
+The tested CUDA run used an adapted MOSS ONNX runtime; a clean installation of the unmodified upstream runtime still needs validation. Install a CUDA-compatible ONNX Runtime GPU package in place of the CPU package and follow the upstream runtime's dependency instructions.
+
+For English, add `--language en`; for a configured CUDA environment, select `--tts-backend moss_onnx --tts-device cuda`. See [TTS backends and voice registration](scripts/sound/TTS.md) for setup, fixed assistant voices and optional reference voices.
 
 `--check` validates local inputs without loading models or calling the API. The final command requests at least three minutes of credited audio. Reuse the same `--root` to resume from completion receipts.
 
@@ -134,7 +139,7 @@ import json
 import soundfile as sf
 from huggingface_hub import hf_hub_download
 
-REPO = "BiggestWave/ChorusDuplex-SideTalk"
+REPO = "BiggestWave/Chorus-Duplex"
 
 
 def fetch(path):
@@ -157,7 +162,7 @@ print(timeline[0]["speaker"], timeline[0]["start_sec"], timeline[0]["end_sec"])
 
 ## Data, limitations and attribution
 
-The data is synthetic Mandarin. Generation checks script structure, timing, truncation and audio format. The CLI currently runs without ASR. The dataset card lists available recordings, audio demos and sources. [Hugging Face dataset](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk)
+The data consists of synthetic Chinese and English dialogue. Generation checks script structure, timing, truncation and audio format. The CLI currently runs without ASR. The dataset card lists available recordings, audio demos and sources. [Hugging Face dataset](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex)
 
 VOiCES is from SRI International / Lab41, In-Q-Tel, under CC BY 4.0. Preserve attribution when redistributing audio mixes. For human voice references, use appropriately licensed clips and keep their source and licence in the manifest. [VOiCES corpus](https://registry.opendata.aws/lab41-voices/)
 
@@ -165,4 +170,4 @@ Maintainer · David
 
 ## Dataset citation
 
-If you use the dataset, cite the [BibTeX entry on the dataset card](https://huggingface.co/datasets/BiggestWave/ChorusDuplex-SideTalk#citation).
+If you use the dataset, cite the [BibTeX entry on the dataset card](https://huggingface.co/datasets/BiggestWave/Chorus-Duplex#citation).

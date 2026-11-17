@@ -4,7 +4,7 @@
     oneshot_script_prompt   一对多直出（主链路，见 oneshot_agent/）
     director_prompt / p1_user_roleplay_multi / assistant_prompt_multi   多 Agent 路径（见 multiagent/）
 已迁出的历史模板（论文 §11.4）：
-    P1~P4 标签注入式（1:1 时代）→ scripts/text/tmp/legacy_prompts.py（存档，无调用）
+    P1~P4 标签注入式（1:1 时代）→ 历史归档（不参与当前生成）
     P5 质量评审 → scripts/text/judge/review.py
 """
 from __future__ import annotations

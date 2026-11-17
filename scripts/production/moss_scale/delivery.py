@@ -3,7 +3,6 @@ from collections import Counter
 import hashlib
 import json
 import os
-from pathlib import Path
 import random
 
 import soundfile as sf
@@ -12,13 +11,13 @@ from scripts.sound.background.clips import stitch_clips
 from scripts.sound.background.mix import mix
 from scripts.sound.synthesis.dialogue_to_wav import SAMPLE_RATE
 
-from .config import BABBLE
+from .config import background_root
 from .render import render
 from .storage import atomic_json
 
 
 def background_rooms():
-    root = Path(os.environ.get("BG_SOURCE_DIR", BABBLE))
+    root = background_root()
     rooms = sorted(path for path in root.glob("rm*/babb") if any(path.glob("*.wav")))
     if not rooms:
         raise FileNotFoundError(f"VOiCES WAV clips not found under {root}/rm*/babb. Set BG_SOURCE_DIR.")
@@ -96,3 +95,83 @@ def refresh(root, target):
     atomic_json(root/"status.json",{"dialogues":len(rows),"credited_hours":seconds/3600,
                                     "target_hours":target,"turn_kinds":kinds,"asr_enabled":False})
     return seconds/3600
+
+
+class DeliveryIndex:
+    """Maintain derived annotations and status under the production lock.
+
+    Completed receipts are authoritative. Rebuild the derived files at startup
+    so a crash at any point during a previous update can be recovered.
+    """
+
+    def __init__(self, root, target):
+        self.root = root
+        self.target = target
+        self.dirty = True
+        self._rebuild()
+
+    @property
+    def hours(self):
+        return self.seconds / 3600
+
+    def _write_status(self):
+        atomic_json(self.root / "status.json", {
+            "dialogues": len(self.ids),
+            "credited_hours": self.hours,
+            "target_hours": self.target,
+            "turn_kinds": self.kinds,
+            "asr_enabled": False,
+        })
+
+    def _rebuild(self):
+        paths = sorted((self.root / "completed").glob("*.json"))
+        ids = set()
+        seconds = 0.0
+        kinds = Counter()
+        temp = self.root / "annotations.jsonl.tmp"
+        with temp.open("w", encoding="utf-8", newline="\n") as file:
+            for path in paths:
+                row = json.loads(path.read_text(encoding="utf-8"))
+                annotation = row["annotation"]
+                ident = annotation["dialogue_id"]
+                if ident != path.stem or ident in ids:
+                    raise ValueError(f"Invalid or duplicate completed receipt: {path.name}")
+                ids.add(ident)
+                seconds += row["credited_seconds"]
+                kinds.update(turn["kind"] for turn in annotation["turns"])
+                file.write(json.dumps(annotation, ensure_ascii=False) + "\n")
+        temp.replace(self.root / "annotations.jsonl")
+        self.ids = ids
+        self.max_id = max(ids, default=None)
+        self.seconds = seconds
+        self.kinds = kinds
+        self._write_status()
+        self.dirty = False
+
+    def add(self, receipt):
+        if self.dirty:
+            self._rebuild()
+        annotation = receipt["annotation"]
+        ident = annotation["dialogue_id"]
+        path = self.root / "completed" / f"{ident}.json"
+        if json.loads(path.read_text(encoding="utf-8")) != receipt:
+            raise ValueError(f"Completed receipt changed: {ident}")
+        if ident in self.ids:
+            return self.hours
+        # Preserve the sorted index expected by existing exports when resuming
+        # an earlier missing ID. New monotonic deliveries use the fast path.
+        if self.max_id is not None and ident < self.max_id:
+            self._rebuild()
+            return self.hours
+        self.dirty = True
+        with (self.root / "annotations.jsonl").open("a", encoding="utf-8", newline="\n") as file:
+            file.write(json.dumps(annotation, ensure_ascii=False) + "\n")
+            file.flush()
+            os.fsync(file.fileno())
+        self.ids.add(ident)
+        self.max_id = ident
+        self.seconds += receipt["credited_seconds"]
+        self.kinds.update(turn["kind"] for turn in annotation["turns"])
+        self._write_status()
+        self.dirty = False
+        return self.hours

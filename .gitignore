@@ -1,8 +1,83 @@
+# ========== AI 协作约定（本地保留，不入库） ==========
+CLAUDE.md
+# AI 工具配置与项目级 skill（本地保留）
+.claude/
+
+# ========== 密钥配置（本地保留，不入库） ==========
+.env
+
+# ========== Python ==========
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# ========== 语音数据（大文件不入库，用 DVC/网盘管理） ==========
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.pcm
+*.opus
+*.ogg
+*.aac
+*.amr
+*.sph
+
+# ========== 可再生成产物（日志、输出、试验，不入库） ==========
+logs/
+output/
+Experiments/
+
+# ========== 模型权重 ==========
+*.pt
+*.pth
+*.onnx
+*.bin
+*.safetensors
+*.h5
+*.ckpt
+
+# ========== IDE / 系统 ==========
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ========== 大文件数据（不入库） ==========
+# 人物池：整包 422MB 在 data/external/persona_pool_full/（不入库，需还原时 cat 分片即可）；
+# 分片 elite_personas.part00-04.jsonl（各 ~84MB < GitHub 100MB 单文件限）入库
+data/personas/*
+!data/personas/elite_personas.part[0-9][0-9].jsonl
+data/external/
+
+# ========== 生成物中间文件 ==========
+docs/paper/_report_build.html
+
+# ========== 会话归档（体积大，不入库） ==========
+docs/archive/sessions/
+
+# Public release exclusions
 # Local credentials and private material
 .env
 .env.*
 !.env.example
 *token*.txt
+*password*.txt
+*secret*.txt
+github.txt*
 *.pem
 *.key
 *.p12
@@ -11,6 +86,7 @@
 AGENTS.md
 CLAUDE.md
 docs/paper/
+# Already-tracked files and their commit history are not removed by ignore rules.
 docs/paper_pipeline.md
 docs/archive/
 *tech_report*

@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import os
 import random
 import re
 import zlib
@@ -53,26 +54,99 @@ identity_ask=按顺序的三条主轮（中间允许其他用户接话，以遵�
 def strong_question(text):
     return bool(re.search(r"[?？]|能不能|能否|是不是|有没有|要不要|可不可以|应不应该",text))
 
+
+def unsupported_assistant_action(text):
+    """Flag explicit claims of performing operations outside this synthetic assistant."""
+    text = text.replace("’", "'")
+    english = re.search(
+        r"\bi(?:'ll| will| have)\s+"
+        r"(?:(?:already|just|personally|go|and)\s+){0,2}"
+        r"(?:buy|bought|purchase|purchased|pick up|send|sent|email|message|call|book|booked|pay|paid)\b",
+        text, re.IGNORECASE,
+    )
+    share = re.search(
+        r"\bi(?:'ll| will| have)\s+(?:share|shared|create|created|set up)\b.{0,40}"
+        r"\b(?:link|document|spreadsheet|sheet|file|calendar)\b",
+        text, re.IGNORECASE,
+    )
+    chinese = re.search(
+        r"(?:我|我们)(?:已经|刚刚|现在|马上|这就|会)(?:帮你|替你|给你|去|把[^，。]{0,8})?"
+        r"(?:买|购买|订|预订|预约|支付|付款|寄|发送|发给|打电话|开车|搬)", text,
+    )
+    return bool(english or share or chinese)
+
+
+def repeated_incomplete_start(parts):
+    """Detect repeated beginnings for review; repetition may be natural hesitation."""
+    if not isinstance(parts, list) or len(parts) != 2 or not all(isinstance(x, str) for x in parts):
+        return False
+    cleaned = []
+    for part in parts:
+        text = re.sub(r"那个|让我想想|等我想想|我想一下|呃|嗯|let me think|give me a second", "", part,
+                      flags=re.IGNORECASE)
+        cleaned.append("".join(c for c in text.lower() if c.isalnum()))
+    prefix = os.path.commonprefix(cleaned)
+    threshold = 8 if re.search(r"[\u3400-\u9fff]", prefix) else 18
+    return len(prefix) >= threshold
+
+
 def ai_request_candidates(d):
+    english_requests = re.compile(
+        r"\b(?:can you|could you|would you|please|help (?:me|us)|tell me|show me|"
+        r"give me|recommend|suggest|explain|what|how|when|where|why|which)\b",
+        re.IGNORECASE,
+    )
     return [i for i,t in enumerate(d.turns) if t.speaker.startswith("user_") and t.kind!="backchannel"
             and (t.addressee=="assistant" or isinstance(t.addressee,list) and "assistant" in t.addressee)
-            and re.search(r"[?？]|请|帮我|帮我们|能不能|能否|是不是|有没有|要不要|麻烦|想问|推荐|怎么|如何",t.text)]
+            and (re.search(r"[?？]|请|帮我|帮我们|能不能|能否|是不是|有没有|要不要|麻烦|想问|推荐|怎么|如何",t.text)
+                 or d.profile.get("language") == "en" and english_requests.search(t.text))]
 
 
 def audit(d: Dialogue, required: list[str] | None = None) -> dict:
     issues = []
+    warnings = []
     def flag(code, i, detail):
         issues.append({"code": code, "turn_id": i, "detail": detail})
     valid = {p.id for p in d.participants} | {"assistant"}
+    valid.update(t.speaker for t in d.turns if t.speaker.startswith("third_party_"))
+    english = d.profile.get("language") == "en"
     host = None
     counts = {"barge_in": 0, "ai_backchannel": 0, "backchannel": 0, "interruption": 0}
     for i, t in enumerate(d.turns):
         if t.speaker not in valid and not t.speaker.startswith("third_party_"):
             flag("invalid_speaker", i, t.speaker)
-        if t.kind not in {"speech","backchannel","interruption","side_talk"}:
+        if t.kind not in {"speech","backchannel","interruption","side_talk","incomplete"}:
             flag("invalid_kind", i, t.kind)
         if t.speaker.startswith("third_party_") != (t.kind=="side_talk"):
             flag("side_talk_speaker_mismatch", i, t.speaker)
+        if t.interaction not in (None, "choice_request", "choice_setup", "simultaneous_requests", "conflict_clarification",
+                                 "choice_resolution", "choice_confirmation"):
+            flag("invalid_simultaneous_requests", i, "unknown interaction type")
+        if t.interaction == "choice_setup":
+            options = t.choice_options
+            if (t.speaker != "assistant" or t.kind != "speech" or not isinstance(options, list)
+                    or len(options) != 2 or any(not isinstance(x, str) or not x.strip() for x in options)
+                    or options[0] == options[1]
+                    or i == 0 or d.turns[i-1].interaction != "choice_request"
+                    or t.responds_to != [i-1] or d.turns[i-1].choice_options != options
+                    or options[0] not in d.turns[i-1].text or options[1] not in d.turns[i-1].text
+                    or d.turns[i-1].text.index(options[0]) >= d.turns[i-1].text.index(options[1])):
+                flag("invalid_simultaneous_requests", i, "setup must state two ordered distinct options")
+        if t.interaction == "simultaneous_requests" and t.overlap_with is None:
+            if i + 1 >= len(d.turns) or d.turns[i + 1].overlap_with != i:
+                flag("invalid_simultaneous_requests", i, "first request must have a simultaneous partner")
+        if t.interaction == "conflict_clarification":
+            if (i < 2 or d.turns[i - 1].overlap_with != i - 2 or t.speaker != "assistant"
+                    or t.responds_to != [i - 2, i - 1] or i + 2 >= len(d.turns)
+                    or d.turns[i + 1].interaction != "choice_resolution"
+                    or d.turns[i + 1].responds_to != [i]
+                    or d.turns[i + 1].speaker not in (d.turns[i - 2].speaker, d.turns[i - 1].speaker)
+                    or d.turns[i + 2].interaction != "choice_confirmation"
+                    or d.turns[i + 2].speaker != "assistant" or d.turns[i + 2].responds_to != [i + 1]):
+                flag("missing_conflict_clarification", i, "clarification must respond to both requests")
+        if t.interaction == "choice_resolution":
+            if type(t.choice_index) is not int or t.choice_index not in (0, 1):
+                flag("invalid_simultaneous_requests", i, "resolution must select one of the two options")
         addr = t.addressee if isinstance(t.addressee, list) else [t.addressee]
         if not addr or any(a not in valid | {"third_party", "all", "none"} for a in addr):
             flag("invalid_addressee", i, str(addr))
@@ -83,6 +157,8 @@ def audit(d: Dialogue, required: list[str] | None = None) -> dict:
         if not t.text.strip(): flag("empty_text", i, "empty utterance")
         if re.search(r"(?:user_\d+|third_party_\d+|\bturn[_ -]?\d+\b|\bturn_id\b|\bresponds_to\b|\banchor_text\b|第\s*\d+\s*轮)",t.text,re.I):
             flag("spoken_internal_metadata",i,t.text)
+        if t.speaker == "assistant" and unsupported_assistant_action(t.text):
+            flag("unsupported_assistant_action", i, t.text)
         if t.kind == "backchannel":
             counts["backchannel"] += 1
             if host is None:
@@ -102,26 +178,90 @@ def audit(d: Dialogue, required: list[str] | None = None) -> dict:
                     isinstance(h.addressee, list) and "assistant" in h.addressee):
                     flag("uninvited_ai_backchannel", i, "host was not addressing AI")
             letters = ''.join(c for c in t.text if c.isalnum())
-            if any(word in t.text for word in ("的话","我觉得","你可以","但是","因为","所以","要不")):
+            if any(word in t.text for word in ("的话","你可以","但是","因为","所以","要不")):
                 flag("contentful_backchannel", i, t.text)
-            if not 1 <= len(letters) <= 6 or any(c in t.text for c in "?？"):
+            too_long = len(t.text.split()) > 6 if english else len(letters) > 14
+            if not letters or too_long or any(c in t.text for c in "?？"):
                 flag("long_or_question_backchannel", i, t.text)
-            if not isinstance(t.insert_ratio, (float, int)) or not math.isfinite(t.insert_ratio) or not .2 <= t.insert_ratio <= .9:
+            # Planned MOSS scripts have an exact text anchor; rendering sets the ratio.
+            planned_anchor = t.insert_ratio is None and bool(t.anchor_text)
+            if not planned_anchor and (not isinstance(t.insert_ratio, (float, int)) or not math.isfinite(t.insert_ratio) or not .0 <= t.insert_ratio < 1):
                 flag("invalid_insert_ratio", i, str(t.insert_ratio))
             if t.speaker == "assistant": counts["ai_backchannel"] += 1
         else:
-            if t.kind == "interruption" or t.gap_before_ms < 0:
+            if t.kind == "interruption":
                 counts["interruption"] += 1
-                if t.kind != "interruption": flag("unlabelled_overlap", i, "negative gap on speech")
-                if host is None or d.turns[host].speaker == t.speaker:
-                    flag("self_or_missing_interruption", i, f"host={host}")
+                host_index = (t.responds_to[0] if len(t.responds_to) == 1
+                              and type(t.responds_to[0]) is int and 0 <= t.responds_to[0] < i else None)
+                if host_index is None or d.turns[host_index].speaker == t.speaker or d.turns[host_index].kind != "speech":
+                    flag("self_or_missing_interruption", i, f"host={host_index}")
+                elif addr != [d.turns[host_index].speaker]:
+                    flag("interruption_addressee", i, "interruption must address its host")
                 if t.gap_before_ms >= 0: flag("nonoverlapping_interruption", i, "requires negative gap")
-                if host is not None and d.turns[host].speaker == "assistant" and t.speaker.startswith("user_"):
+                if host_index is not None and d.turns[host_index].speaker == "assistant" and t.speaker.startswith("user_"):
                     counts["barge_in"] += 1
                     if d.profile.get("require_semantic_anchors"):
                         response=next((j for j in range(i+1,len(d.turns)) if d.turns[j].speaker=="assistant" and d.turns[j].kind!="backchannel"),None)
                         if response is None or response>i+2 or i not in d.turns[response].responds_to:
                             flag("delayed_or_unlinked_barge_response",i,"AI must acknowledge the new request within the next two slots")
+            elif t.gap_before_ms < 0 and not (t.kind == "side_talk" and t.side_talk_entry == "unsolicited") and t.overlap_with is None:
+                flag("unlabelled_overlap", i, "negative gap without an overlapping interaction")
+            if t.kind == "incomplete":
+                handoff = t.resolution == "assistant_handoff"
+                parts = t.parts
+                if repeated_incomplete_start(parts):
+                    warnings.append({"code": "repeated_incomplete_start", "turn_id": i,
+                                     "detail": "repeated beginning may be natural; review in context"})
+                if (not isinstance(parts, list) or len(parts) != (1 if handoff else 2)
+                        or any(not isinstance(part, str) or not part.strip() for part in parts)
+                        or "".join(parts) != t.text):
+                    flag("invalid_incomplete_parts", i, "spoken fragments must match the text")
+                low, high = (2500, 3200) if handoff else (500, 2000)
+                if type(t.pause_ms) is not int or not low <= t.pause_ms <= high:
+                    flag("invalid_incomplete_pause", i, f"expected {low}–{high} ms")
+                if handoff and (i + 1 >= len(d.turns) or d.turns[i + 1].speaker != "assistant"
+                                or d.turns[i + 1].responds_to != [i]):
+                    flag("missing_hesitation_handoff", i, "assistant must respond to the unfinished turn")
+                if t.resolution not in (None, "assistant_handoff"):
+                    flag("invalid_incomplete_resolution", i, str(t.resolution))
+            if t.overlap_with is not None:
+                other = t.overlap_with
+                other_addr = (d.turns[other].addressee if type(other) is int and 0 <= other < i else None)
+                if isinstance(other_addr, str):
+                    other_addr = [other_addr]
+                if (type(other) is not int or other != i - 1 or other < 0
+                        or t.kind != "speech" or t.interaction != "simultaneous_requests"
+                        or d.turns[other].kind != "speech"
+                        or d.turns[other].interaction != "simultaneous_requests"
+                        or t.speaker == d.turns[other].speaker
+                        or t.gap_before_ms >= 0
+                        or addr != ["assistant"] or other_addr != ["assistant"]):
+                    flag("invalid_simultaneous_requests", i, "two different users must address the assistant")
+                elif (i + 1 >= len(d.turns) or d.turns[i + 1].speaker != "assistant"
+                      or d.turns[i + 1].responds_to != [other, i]
+                      or d.turns[i + 1].interaction != "conflict_clarification"):
+                    flag("missing_conflict_clarification", i, "assistant must address both concurrent requests")
+                elif (other < 1 or d.turns[other-1].speaker != "assistant"
+                      or d.turns[other-1].interaction != "choice_setup"
+                      or d.turns[other].responds_to != [other-1] or t.responds_to != [other-1]
+                      or type(d.turns[other].choice_index) is not int or type(t.choice_index) is not int
+                      or {d.turns[other].choice_index, t.choice_index} != {0, 1}):
+                    flag("invalid_simultaneous_requests", i, "both requests need a shared preceding assistant turn")
+                else:
+                    first = d.turns[other]
+                    if first.text.strip().casefold() == t.text.strip().casefold():
+                        flag("invalid_simultaneous_requests", i, "different choices cannot have identical text")
+                    for request in (first, t):
+                        if english:
+                            first_mentioned = re.search(r"\b(?:first|(?:option|choice)\s*(?:one|1|a))\b", request.text, re.I)
+                            second_mentioned = re.search(r"\b(?:second|(?:option|choice)\s*(?:two|2|b))\b", request.text, re.I)
+                        else:
+                            first_mentioned = re.search(r"第一|一号|选一", request.text)
+                            second_mentioned = re.search(r"第二|二号|选二", request.text)
+                        if bool(first_mentioned) != bool(second_mentioned):
+                            mentioned = 0 if first_mentioned else 1
+                            if request.choice_index != mentioned:
+                                flag("invalid_simultaneous_requests", i, "explicit choice conflicts with its index")
             host = i
         for e in t.events:
             if e.turn_index != i: flag("event_index", i, str(e.turn_index))
@@ -141,8 +281,23 @@ def audit(d: Dialogue, required: list[str] | None = None) -> dict:
         from .oneshot_agent.profile import rhythm_valid
         if abs(len(positions)-d.profile["assistant_turns"])>1 or not rhythm_valid(d,d.profile):
             flag("participation_profile", -1, "AI count/rhythm differs from plan")
-    return {"version":"duplex-quality-v3", "passed":not issues, "issues":issues,
-            "coverage":counts, "required_modules":required}
+    groups = {
+        "structure": {"invalid_speaker", "invalid_kind", "empty_text", "event_index", "invalid_incomplete_parts",
+                      "invalid_incomplete_pause", "spoken_internal_metadata", "side_talk_speaker_mismatch"},
+        "causality": {"noncausal_response", "missing_host", "invalid_semantic_anchor", "missing_semantic_anchor",
+                      "unsupported_assistant_action"},
+        "addressing": {"invalid_addressee", "self_address", "uninvited_ai_backchannel", "interruption_addressee"},
+        "duplex": {"self_backchannel", "backchannel_anchor", "long_or_question_backchannel", "contentful_backchannel", "invalid_insert_ratio",
+                   "self_or_missing_interruption", "nonoverlapping_interruption", "unlabelled_overlap", "invalid_simultaneous_requests",
+                   "missing_conflict_clarification", "missing_hesitation_handoff", "invalid_incomplete_resolution"},
+        "continuity": {"missing_mainline_return", "delayed_or_unlinked_barge_response", "missing_module", "participation_profile"},
+    }
+    codes = {issue["code"] for issue in issues}
+    scores = {name: 5 if not codes.intersection(group) else 0 for name, group in groups.items()}
+    return {"version":"duplex-quality-v4", "passed":not issues, "issues":issues, "warnings":warnings,
+            "coverage":counts, "required_modules":required,
+            "rule_scores":scores,
+            "score_scope":"deterministic rules only; semantic correctness and audio quality require separate assessment"}
 
 def augmentation_candidates(d: Dialogue, probability: float, seed: int) -> list[int]:
     if not 0 <= probability <= 1: raise ValueError("probability must be in [0,1]")
