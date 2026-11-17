@@ -237,6 +237,60 @@ def electrical_fault_answer_needs_review(question, answer):
                 and not re.search(safety, answer, re.I))
 
 
+_WIRE_DEVICE = re.compile(
+    r"电源线|电线|线缆|电缆|导线|线芯|铜线|铜丝|"
+    r"\b(?:power|electrical|electric|mains|extension|charging|charger)\s+(?:cords?|cables?|wires?)\b|"
+    r"\b(?:wires?|wiring|plug)\b", re.I,
+)
+_WIRE_FAULT_ZH = r"(?:破损|破了|破皮|磨破|磨损|破裂|裂开|开裂|断裂|损坏|裸露|露线|露铜|露出.{0,3}(?:铜丝|铜线|线芯|电线)|冒烟|火花|漏电)"
+_WIRE_FAULT_EN = r"(?:fray(?:ed|ing|s)?|damag(?:e|ed)|torn|tear(?:s|ing)?|crack(?:ed|s)?|worn|exposed|bare|broken|cuts?|smok(?:e|ing)|spark(?:s|ing)?)"
+_WIRE_FAULT = re.compile(rf"{_WIRE_FAULT_ZH}|\b{_WIRE_FAULT_EN}\b", re.I)
+_NEGATED_WIRE_FAULT = re.compile(
+    rf"(?:没有|没|未|无|不(?:会|再|在)?)(?:发现|任何|明显|出现|在|有|(?:铜丝|铜线|线芯|电线)(?:已经|是)?)*{_WIRE_FAULT_ZH}"
+    rf"(?:(?:、|或|和|及)(?:任何|明显)?{_WIRE_FAULT_ZH})*|"
+    rf"\b(?:no longer|no|not|never|isn't|is not|wasn't|was not|hasn't|has not|without)"
+    rf"(?:\s+(?:any|visible|visibly|signs? of|wires?(?:\s+(?:are|were))?))*\s+{_WIRE_FAULT_EN}"
+    rf"(?:\s+(?:spots?|areas?|wires?|copper|insulation))?"
+    rf"(?:\s*(?:,|and|or)\s*(?:(?:any|visible)\s+)?{_WIRE_FAULT_EN}"
+    rf"(?:\s+(?:spots?|areas?|wires?|copper|insulation))?)*", re.I,
+)
+_NEGATED_WIRE_SAFETY = re.compile(
+    r"(?:不要|别|不必|不用|无需|无须|不需要|没有必要|没必要)(?:再|先|自己|马上|立刻)?"
+    r"(?:停用|停止使用|断电|拔掉|拔下|拔插头|切断电源|(?:找|请|联系|叫)电工)|"
+    r"\b(?:do not|don't|never|no need to|need not|shouldn't|should not|must not)\s+"
+    r"(?:try to\s+)?(?:unplug|disconnect|stop using|switch off|turn off|replace|"
+    r"(?:call|contact)\s+(?:(?:an?|the)\s+)?electrician)\b|"
+    r"\b(?:do not|don't|does not|doesn't)\s+need\s+(?:(?:an?|the)\s+)?electrician\b|"
+    r"\b(?:an?\s+)?electrician\s+is\s+not\s+(?:needed|required|necessary)\b", re.I,
+)
+_WIRE_SAFETY = re.compile(
+    r"停用|停止使用|别再用|先别用|不要(?:再|继续)?(?:使用|用)|不再使用|"
+    r"(?:不用|无需|不必|不能|不可)(?:再)?(?:使用|用)|断电|切断电源|"
+    r"拔(?:掉|下|出)(?:插头|电源)|(?:请|找|联系|叫)(?:专业|电工)|送修|更换|"
+    r"\b(?:stop using|don't use|do not use|remove from service|out of service|"
+    r"unplug|disconnect|switch off|turn off|electrician|replace)\b|"
+    r"\b(?:qualified|repair)\s+professional\b", re.I,
+)
+
+
+def wire_fault_answer_needs_review(question, answer):
+    """Flag a locally reported wire fault; this is not a safety decision."""
+    question = question.replace("’", "'")
+    for clause in re.split(r"[，,。.!?？！；;]", question):
+        if _WIRE_DEVICE.search(clause) and _WIRE_FAULT.search(_NEGATED_WIRE_FAULT.sub("", clause)):
+            safe_words = _NEGATED_WIRE_SAFETY.sub("", answer.replace("’", "'"))
+            return not bool(_WIRE_SAFETY.search(safe_words))
+    return False
+
+
+def _audit_electrical_fault_needs_review(question, answer):
+    """Apply local negation handling without changing optional model-review triggers."""
+    checked_question = _NEGATED_WIRE_FAULT.sub("", question.replace("’", "'"))
+    checked_answer = _NEGATED_WIRE_SAFETY.sub("", answer.replace("’", "'"))
+    return (electrical_fault_answer_needs_review(checked_question, checked_answer)
+            or wire_fault_answer_needs_review(question, answer))
+
+
 def ai_request_candidates(d):
     english_requests = re.compile(
         r"\b(?:can you|could you|would you|please|help (?:me|us)|tell me|show me|"
@@ -387,10 +441,21 @@ def audit(d: Dialogue, required: list[str] | None = None) -> dict:
                 and microphone_answer_needs_review(d.turns[i-1].text, t.text)):
             warnings.append({"code": "possible_unanswered_microphone_question", "turn_id": i,
                              "detail": "check whether the response actually addresses the microphone question"})
-        if (t.speaker == "assistant" and i > 0 and d.turns[i-1].speaker.startswith("user_")
-                and electrical_fault_answer_needs_review(d.turns[i-1].text, t.text)):
-            warnings.append({"code": "electrical_fault_safety_review", "turn_id": i,
-                             "detail": "check whether the explicit electrical fault was addressed safely"})
+        if t.speaker == "assistant" and i > 0:
+            sources = list(dict.fromkeys(
+                ref for ref in t.responds_to
+                if type(ref) is int and 0 <= ref < i and d.turns[ref].speaker.startswith("user_")
+            ))
+            if not t.responds_to and d.turns[i-1].speaker.startswith("user_"):
+                previous_addr = d.turns[i-1].addressee
+                previous_addr = previous_addr if isinstance(previous_addr, list) else [previous_addr]
+                if "assistant" in previous_addr or "all" in previous_addr:
+                    sources.append(i-1)
+            faults = [ref for ref in sources if _audit_electrical_fault_needs_review(d.turns[ref].text, t.text)]
+            if faults:
+                warnings.append({"code": "electrical_fault_safety_review", "turn_id": i,
+                                 "detail": "review whether reported electrical faults were handled safely; "
+                                           f"referenced user turn(s): {', '.join(map(str, faults))}"})
         if t.kind == "backchannel":
             counts["backchannel"] += 1
             if host is None:
