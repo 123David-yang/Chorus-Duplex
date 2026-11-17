@@ -55,7 +55,7 @@ Qwen 的预设音色使用 CustomVoice 模型，参考音色使用 Base 模型�
 
 Qwen 适配器已在 AutoDL 的 RTX 4080 SUPER 上用 `qwen-tts==0.1.1`、官方 0.6B CustomVoice 和 Base 本地快照试运行中文与英文各一条预设和参考音色克隆；均完成生成及解码检查，尚未做听感或长时生产评估。请在独立虚拟环境中按 [Qwen 官方安装说明](https://github.com/QwenLM/Qwen3-TTS)配置与设备匹配的 PyTorch、torchaudio 和 `qwen-tts`，不要在同一环境混装本项目的 MOSS CPU/GPU 依赖清单。官方 Qwen 包目前依赖 CPU 版 ONNX Runtime 且要求旧于 1.0 的 Hugging Face Hub，而 MOSS GPU 清单使用 GPU 版 ONNX Runtime 和 Hub 1.7.1；组合前应确认具体版本兼容。实际生产会在调用剧本服务前加载所需的 Qwen 模型，缺少权重时上游可能下载；`--check` 不会加载或下载模型。
 
-适配器在 Ampere 及更新的 CUDA 设备上使用 bfloat16，其他设备使用 float32；所用 AutoDL GPU 上 float16 推理曾出现数值异常，其他 GPU 仍需单独验证。离线运行时应先完整下载模型，再通过 `QWEN_PRESET_MODEL` 和 `TTS_MODEL` 指向对应本地快照目录；在本次测试中，仅设置离线模式并继续传入 Hub 模型 ID 会使上游加载失败。
+适配器在 Ampere 及更新的 CUDA 设备上使用 bfloat16，其他设备使用 float32；所用 AutoDL GPU 上 float16 推理曾出现数值异常，其他 GPU 仍需单独验证。离线运行时应先完整下载模型，可通过 `QWEN_PRESET_MODEL` 和 `TTS_MODEL` 指向对应本地快照目录。设置 `HF_HUB_OFFLINE=1` 后若传入 Hub 模型 ID，适配器先仅从指定缓存解析本地快照；缓存缺失时失败。此解析分支目前经过模拟测试，真实 GPU 小样验证的是显式传入本地快照的路径。
 
 `scale_moss --tts-backend qwen3` 可选择 Qwen 适配器；`produce_and_upload` 目前固定使用 MOSS，尚未支持 Qwen 自动生产并上传。
 

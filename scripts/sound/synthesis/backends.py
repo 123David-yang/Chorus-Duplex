@@ -168,6 +168,10 @@ class QwenBackend:
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
+                    offline = os.environ.get("HF_HUB_OFFLINE", "").upper() in {"1", "ON", "YES", "TRUE"}
+                    if offline and not Path(name).is_dir():
+                        from huggingface_hub import snapshot_download
+                        name = snapshot_download(name, cache_dir=str(self.cache_dir), local_files_only=True)
                     self.models[kind]=self.factory.from_pretrained(
                         name, device_map=self.device,
                         dtype=self.dtype,

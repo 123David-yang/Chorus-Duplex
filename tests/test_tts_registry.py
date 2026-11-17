@@ -167,6 +167,31 @@ class VoiceRegistryTests(unittest.TestCase):
 
 
 class BackendTests(unittest.TestCase):
+    def test_qwen_offline_model_id_is_resolved_without_network(self):
+        calls = []
+        class Factory:
+            @staticmethod
+            def from_pretrained(name, **kwargs):
+                calls.append(name)
+                return object()
+        torch = types.SimpleNamespace(float32="float32")
+        with TemporaryDirectory() as folder, \
+             patch.dict(sys.modules, {"torch": torch, "qwen_tts": types.SimpleNamespace(Qwen3TTSModel=Factory)}), \
+             patch.dict(os.environ, {"TTS_DEVICE": "cpu", "HF_HUB_OFFLINE": "1"}, clear=True), \
+             patch("huggingface_hub.snapshot_download", return_value=folder) as download:
+            backend = backends.QwenBackend(None)
+            backend._model("preset")
+            self.assertEqual(calls, [folder])
+            self.assertTrue(download.call_args.kwargs["local_files_only"])
+            backend._model("preset")
+            self.assertEqual(download.call_count, 1)
+            backend.models.clear()
+            download.side_effect = FileNotFoundError("private-cache-path-sentinel")
+            with self.assertRaises(RuntimeError) as failure:
+                backend._model("preset")
+            self.assertNotIn("private-cache-path-sentinel", str(failure.exception))
+            self.assertEqual(len(calls), 1)
+
     def test_qwen_unindexed_cuda_uses_current_device_for_precision_and_loading(self):
         calls = []
         class Factory:
