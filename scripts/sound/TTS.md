@@ -55,13 +55,13 @@ Qwen 的预设音色使用 CustomVoice 模型，参考音色使用 Base 模型�
 
 Qwen 适配器已在 AutoDL 的 RTX 4080 SUPER 上用 `qwen-tts==0.1.1`、官方 0.6B CustomVoice 和 Base 本地快照试运行中文与英文各一条预设和参考音色克隆；均完成生成及解码检查，尚未做听感或长时生产评估。请在独立虚拟环境中按 [Qwen 官方安装说明](https://github.com/QwenLM/Qwen3-TTS)配置与设备匹配的 PyTorch、torchaudio 和 `qwen-tts`，不要在同一环境混装本项目的 MOSS CPU/GPU 依赖清单。官方 Qwen 包目前依赖 CPU 版 ONNX Runtime 且要求旧于 1.0 的 Hugging Face Hub，而 MOSS GPU 清单使用 GPU 版 ONNX Runtime 和 Hub 1.7.1；组合前应确认具体版本兼容。实际生产会在调用剧本服务前加载所需的 Qwen 模型，缺少权重时上游可能下载；`--check` 不会加载或下载模型。
 
-适配器在 Ampere 及更新的 CUDA 设备上使用 bfloat16，其他设备使用 float32；所用 AutoDL GPU 上 float16 推理曾出现数值异常，其他 GPU 仍需单独验证。离线运行时应先完整下载模型，可通过 `QWEN_PRESET_MODEL` 和 `TTS_MODEL` 指向对应本地快照目录。设置 `HF_HUB_OFFLINE=1` 后若传入 Hub 模型 ID，适配器先仅从指定缓存解析本地快照；缓存缺失时失败。此解析分支目前经过模拟测试，真实 GPU 小样验证的是显式传入本地快照的路径。
+适配器在 Ampere 及更新的 CUDA 设备上使用 bfloat16，其他设备使用 float32；所用 AutoDL GPU 上 float16 推理曾出现数值异常，其他 GPU 仍需单独验证。离线运行时应先完整下载模型，可通过 `QWEN_PRESET_MODEL` 和 `TTS_MODEL` 指向对应本地快照目录。设置 `HF_HUB_OFFLINE=1` 后若传入 Hub 模型 ID，适配器先仅从指定缓存解析本地快照；缓存缺失时失败。AutoDL 上已用模型 ID 和既有缓存验证解析、实体化及后续 GPU 推理。
 
 `scale_moss --tts-backend qwen3` 可选择 Qwen 适配器；`produce_and_upload` 目前固定使用 MOSS，尚未支持 Qwen 自动生产并上传。
 
 Qwen 生产入口会在恢复交付、加载权重和生成剧本前，为预设与启用的克隆模型分别核对内容摘要，并以 `model-lock.json` 绑定生产目录。标准 HF 缓存快照会先复制到资源目录的 `qwen_materialized` 下，首次需要额外磁盘和复制时间，后续复用实体快照并重新校验摘要。模型内容变化时须用新生产目录；已有音频、待完成交付或旧 staging 内容但无身份锁的目录不能补绑。已加载的后端实例不能重新绑定。
 
-该锁只验证内容连续性，不认证模型来源，也不保证不同设备或运行版本的听感一致。快照应来自可信、静止的缓存；它不提供对抗性文件系统隔离。新绑定路径目前经过模拟及小型合成权重集成测试，尚未在真实 Qwen GPU 运行中复测；模型或缓存准备失败后保留现场，不自动覆盖或删除。
+该锁只验证内容连续性，不认证模型来源，也不保证不同设备或运行版本的听感一致。快照应来自可信、静止的缓存；它不提供对抗性文件系统隔离。AutoDL RTX 4080 SUPER 上已验证双模型首次绑定、全新后端实例续跑比对，以及中英文预设和克隆四条短音频生成及解码；该小样不含完整对话交付、上传或长时生产。模型或缓存准备失败后保留现场，不自动覆盖或删除。
 
 使用内置 Qwen 后端新生成的交付，在可确认设备与精度时于标注的 `profile.tts_runtime` 中记录引擎、实际设备编号和计算精度；该记录不包含模型版本或权重身份，旧交付不会补写。
 
