@@ -95,6 +95,7 @@ def _assert_public_safe(value):
 def validate_delivery(root: Path, ident: str, max_bytes: int = MAX_BATCH_BYTES,
                       expected_receipt_sha256: str | None = None) -> tuple[dict, dict[str, bytes]]:
     import soundfile as sf
+    import numpy as np
     from scripts.text.quality import audit
     from scripts.text.utils.schema import Dialogue
 
@@ -146,13 +147,19 @@ def validate_delivery(root: Path, ident: str, max_bytes: int = MAX_BATCH_BYTES,
                 if (audio.frames, audio.samplerate, audio.channels) != (frames, sample_rate, 2):
                     raise ValueError("Clean/noisy audio format differs from the receipt")
                 decoded = 0
+                nonzero = False
                 while decoded < frames:
                     block = audio.read(min(65536, frames - decoded), dtype="float32", always_2d=True)
                     if not len(block):
                         break
+                    if not np.isfinite(block).all():
+                        raise ValueError("Clean/noisy audio contains nonfinite samples")
+                    nonzero = nonzero or bool(np.any(block != 0))
                     decoded += len(block)
                 if decoded != frames:
                     raise ValueError("Clean/noisy audio ends before its claimed length")
+                if not nonzero:
+                    raise ValueError("Clean/noisy audio is entirely silent")
         except RuntimeError:
             raise ValueError("Clean/noisy audio cannot be fully decoded") from None
     timeline = json.loads(paths[f"audio/{names[2]}"])

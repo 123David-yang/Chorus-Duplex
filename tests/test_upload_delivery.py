@@ -62,6 +62,51 @@ class DeliveryUploadTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "modified"):
             validate_delivery(self.root, self.ident)
 
+    def test_silent_audio_is_rejected_even_with_matching_receipt(self):
+        for suffix in ('', '_babble'):
+            with self.subTest(suffix=suffix):
+                name = f'{self.ident}{suffix}.flac'
+                path = self.root / 'audio' / name
+                original = path.read_bytes()
+                receipt_path = self.root / 'completed' / f'{self.ident}.json'
+                original_receipt = receipt_path.read_bytes()
+                sf.write(path, np.zeros((480, 2)), 48000)
+                receipt = json.loads(original_receipt)
+                receipt['sha256'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
+                receipt_path.write_text(json.dumps(receipt), encoding='utf-8')
+                with self.assertRaisesRegex(ValueError, 'entirely silent'):
+                    validate_delivery(self.root, self.ident)
+                path.write_bytes(original)
+                receipt_path.write_bytes(original_receipt)
+
+    def test_late_signal_after_silence_remains_valid(self):
+        for suffix in ('', '_babble'):
+            name = f'{self.ident}{suffix}.flac'
+            path = self.root / 'audio' / name
+            audio = np.zeros((70000, 2))
+            audio[-20:] = .01
+            sf.write(path, audio, 48000)
+            receipt_path = self.root / 'completed' / f'{self.ident}.json'
+            receipt = json.loads(receipt_path.read_text(encoding='utf-8'))
+            receipt['frames'] = len(audio)
+            receipt['credited_seconds'] = len(audio) / 48000
+            receipt['sha256'][name] = hashlib.sha256(path.read_bytes()).hexdigest()
+            receipt_path.write_text(json.dumps(receipt), encoding='utf-8')
+        validate_delivery(self.root, self.ident)
+
+    def test_nonfinite_decoded_audio_is_rejected_with_matching_hash(self):
+        path = self.root / 'audio' / f'{self.ident}.flac'
+        audio = np.full((480, 2), .01)
+        audio[-1, 0] = np.nan
+        # A matching receipt must not make a decodable float container trustworthy.
+        sf.write(path, audio, 48000, format='WAV', subtype='FLOAT')
+        receipt_path = self.root / 'completed' / f'{self.ident}.json'
+        receipt = json.loads(receipt_path.read_text(encoding='utf-8'))
+        receipt['sha256'][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        receipt_path.write_text(json.dumps(receipt), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'nonfinite'):
+            validate_delivery(self.root, self.ident)
+
     def test_truncated_flac_with_matching_hash_and_header_is_rejected(self):
         name = f"{self.ident}.flac"
         path = self.root / "audio" / name
