@@ -72,6 +72,24 @@ def draft(language, mode, seed=15):
 
 
 class DialogueQualityTests(unittest.TestCase):
+    def test_backchannel_audio_time_follows_measured_anchor_not_whole_turn(self):
+        class KnownDurationSynth:
+            def line(self, content, voice, offset=0):
+                seconds = {'先量一下尺寸': 1, '操作前请先断电。': 3, '明白。': .4}[content]
+                return np.full(round(seconds * 48000), .1, dtype=np.float32)
+        d = {'dialogue_id': 'anchor-timing', 'profile': {'voice_assignments': {'assistant': 'host', 'user_01': 'listener'}},
+             'turns': [{'turn_id': 0, 'speaker': 'assistant', 'addressee': 'user_01', 'kind': 'speech',
+                        'text': '先量一下尺寸，操作前请先断电。', 'gap_before_ms': 0},
+                       {'turn_id': 1, 'speaker': 'user_01', 'addressee': 'assistant', 'kind': 'backchannel',
+                        'text': '明白。', 'anchor_text': '先量一下尺寸', 'responds_to': [0], 'gap_before_ms': 0}]}
+        with tempfile.TemporaryDirectory() as folder:
+            timeline = Path(folder)/'timeline.json'
+            render(d, KnownDurationSynth(), Path(folder)/'clean.flac', timeline)
+            rows = json.loads(timeline.read_text(encoding='utf-8'))
+        self.assertAlmostEqual(rows[1]['anchor_boundary_sec'], 1)
+        self.assertAlmostEqual(rows[1]['start_sec'], 1.08)
+        self.assertLess(rows[1]['start_sec'], rows[0]['end_sec'])
+
     def test_english_sentence_boundary_is_not_sent_as_leading_tts_punctuation(self):
         calls = []
         class CaptureSynth(FakeSynth):

@@ -142,6 +142,8 @@ def generate(index, root, mode="direct", language="zh"):
     if path.exists():
         draft = json.loads(path.read_text(encoding="utf-8"))
         profile = draft.get("profile", {})
+        if profile.get("draft_mode", "direct") != mode:
+            raise ValueError("Cached dialogue uses a different draft mode; use a separate output root.")
         if profile.get("tts_backend", "moss_onnx") != backend:
             raise ValueError("Cached dialogue uses a different TTS backend; use a separate output root.")
         bindings = profile.get("voice_bindings")
@@ -221,6 +223,8 @@ def generate(index, root, mode="direct", language="zh"):
                    sequential_backchannels=not simultaneous, repeat_listener=repeat_listener, language=language,
                    simultaneous_requests=simultaneous_requests)
     targeted_calls = 0
+    anchor_review = None
+    alignment_attempted = False
     for attempt in range(2):
         d = None
         targeted_review = None
@@ -232,6 +236,11 @@ def generate(index, root, mode="direct", language="zh"):
                 if language == "en":
                     raise
                 shorten_backchannels(d)
+                validate(d, users, events, group, group_interrupt, **options)
+            if os.environ.get("CHORUS_ALIGN_BACKCHANNELS") == "1":
+                from .anchor_alignment import align_backchannel_anchors
+                alignment_attempted = any(turn["kind"] == "backchannel" for turn in d["turns"])
+                anchor_review = align_backchannel_anchors(d)
                 validate(d, users, events, group, group_interrupt, **options)
             if os.environ.get("CHORUS_TARGETED_SAFETY_REVIEW") == "1" and not targeted_calls:
                 from .targeted_review import review_once
@@ -263,7 +272,7 @@ def generate(index, root, mode="direct", language="zh"):
             atomic_json(root/"staging"/f"{ident}-planned-reject-{attempt}.json",
                         {"error":diagnostic["hint"], "code":diagnostic["code"], "diagnostic":diagnostic, "draft":safe_draft})
             context["上次问题"] = diagnostic["hint"]
-            if attempt:
+            if attempt or alignment_attempted:
                 raise
     d.update(dialogue_id=ident, scenario="side_talk" if "side_talk" in events else "multi_qa")
     for i, t in enumerate(d["turns"]):
@@ -297,6 +306,8 @@ def generate(index, root, mode="direct", language="zh"):
         d["profile"]["language"] = "en"
     if targeted_review and targeted_review["status"] != "not_triggered":
         d["profile"]["targeted_safety_review"] = targeted_review
+    if anchor_review is not None:
+        d["profile"]["anchor_alignment"] = anchor_review
     apply_rule_quality(d)
     atomic_json(path, d)
     return d

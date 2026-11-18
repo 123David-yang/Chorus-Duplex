@@ -141,7 +141,7 @@ def main():
     parser.add_argument("--start-index", type=int, default=0, help="first candidate index")
     parser.add_argument("--run-tag", help="unique public-safe namespace for a new production root")
     parser.add_argument("--continuous", action="store_true", help="continue until stopped")
-    parser.add_argument("--draft-mode", choices=("direct", "interactive"), default="direct")
+    parser.add_argument("--draft-mode", choices=("direct", "interactive", "roleplay"), default="direct")
     parser.add_argument("--language", choices=("zh", "en"), default="zh")
     parser.add_argument("--tts-backend", help="moss_onnx, qwen3, kokoro, or module:factory")
     parser.add_argument("--tts-device", help="cpu or cuda (CUDA support depends on backend)")

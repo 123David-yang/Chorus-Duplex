@@ -116,7 +116,8 @@ def plan_slots(users, events, group, repeat, group_interrupt, transition, handof
                            "在说出真正想问的细节前卡住，停在一个没讲完的分句。"+vocal_cue, "handoff")
                 add("assistant", listener, refs=[host], cue="长停顿后温和接话，给出基于已知事实的具体下一步。承接实际卡点，别套用‘先别急’之类的开头，也别猜测用户还没说出的选择。")
             else:
-                add(listener, "all", "incomplete", [len(slots)-1], rng.choice(RESUME_CUES)+vocal_cue, "resume")
+                add(listener, "all", "incomplete", [len(slots)-1], rng.choice(RESUME_CUES)+vocal_cue+
+                    "第一段要留下一个明确待补的名称、时间、地点、数量、对象或选择；第二段先补上该项。不要用已完整的判断加犹豫，再另讲一件事。", "resume")
         elif event == "simultaneous_requests":
             first, second = rng.sample(users, 2)
             options = list(rng.choice(generation_choice_option_sets(language, topic)))
@@ -211,6 +212,8 @@ def plan_slots(users, events, group, repeat, group_interrupt, transition, handof
 
 
 def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
+    if mode not in {"direct", "interactive", "roleplay"}:
+        raise ValueError("Unknown draft mode")
     instruction = (
         "为给定结构写自然的中文多人会话。只返回 JSON 对象，键为 turn 的字符串编号，"
         "普通轮值是台词字符串；标了 form=anchor、resume 或 transition 的轮，值为两个非空台词字符串组成的数组。"
@@ -282,9 +285,19 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
     authored = {}
     # Interactive mode hands the first half to a second drafting call as shared conversation history.
     chunks = [range(len(slots))] if mode == "direct" else [range(len(slots)//2), range(len(slots)//2, len(slots))]
+    if mode == "roleplay":
+        chunks = [range(i, i + 1) for i in range(len(slots))]
     for chunk in chunks:
         turns = {str(i): {k: v for k, v in slots[i].items() if v is not None and v != []} for i in chunk}
         request = {"背景": context, "待写轮次": turns}
+        if mode == "roleplay":
+            current = chunk.start
+            request["当前角色"] = slots[current]["speaker"]
+            request["角色边界"] = "只写当前角色这一轮；历史中的speaker是信息持有人，addressee决定你/your指谁。不要把其他人的限制改成自己的，也不能把人类任务归给助手。"
+            request["后续事件计划_并非已发生事实"] = [
+                {key: turn[key] for key in ("speaker", "kind", "form") if turn.get(key) is not None}
+                for turn in slots[current + 1:current + 3]
+            ]
         setup = next((s for s in slots if s.get("interaction") == "choice_setup"), None)
         if setup:
             request["全局场景线索"] = (
@@ -295,6 +308,7 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
             request["角色私有倾向"] = {
                 s["speaker"]: setup["choice_options"][s["choice_index"]]
                 for s in slots if s.get("interaction") == "simultaneous_requests"
+                and (mode != "roleplay" or s["speaker"] == slots[chunk.start]["speaker"])
             }
             request["倾向说明"] = (
                 "这些是作者的角色设定，前后不得无故写成相反倾向。"
@@ -322,14 +336,38 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
                       "addressee": slots[int(key)]["addressee"], "text": wording}
                 for key, wording in authored.items()
             }
-        raw = chat(instruction, json.dumps(request, ensure_ascii=False, separators=(",", ":")),
-                   max_tokens=4500, temperature=.75, json_output=True)
-        result = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
+            if mode == "roleplay" and slots[chunk.start]["kind"] == "backchannel":
+                for host in slots[chunk.start].get("responds_to", []):
+                    key = str(host)
+                    if slots[host].get("form") == "anchor" and isinstance(authored.get(key), list):
+                        request["前半段已说过的台词"][key]["text"] = authored[key][0]
+                request["可听范围"] = "附和发生在宿主前缀说完后；历史中的宿主只展示此时已说出的内容，不能依赖后半句。"
+        if mode == "roleplay" and "fixed_text" in slots[chunk.start]:
+            result = {str(chunk.start): slots[chunk.start]["fixed_text"]}
+        else:
+            raw = chat(instruction, json.dumps(request, ensure_ascii=False, separators=(",", ":")),
+                       max_tokens=700 if mode == "roleplay" else 4500, temperature=.75, json_output=True)
+            result = json.loads(raw.strip().removeprefix("```json").removesuffix("```").strip())
         if not isinstance(result, dict) or set(result) != set(turns):
             raise ValueError("台词编号与事件计划不一致")
         for i in chunk:
             if "fixed_text" in slots[i]:
                 result[str(i)] = slots[i]["fixed_text"]
+            if mode == "roleplay":
+                wording = result[str(i)]
+                split = slots[i].get("form") in {"anchor", "resume", "transition"}
+                if isinstance(wording, dict):
+                    wording = wording.get("parts" if split else "text")
+                if not split and isinstance(wording, list) and all(isinstance(part, str) for part in wording):
+                    wording = "".join(wording)
+                if split:
+                    if not isinstance(wording, list) or len(wording) != 2 or not all(isinstance(part, str) and part.strip() for part in wording):
+                        from .errors import DraftShapeError
+                        raise DraftShapeError(i, wording)
+                    wording = [part.strip() for part in wording]
+                elif not isinstance(wording, str) or not wording.strip():
+                    raise ValueError("逐角色台词必须是非空字符串")
+                result[str(i)] = wording
         authored.update(result)
     output = []
     anchors = {}

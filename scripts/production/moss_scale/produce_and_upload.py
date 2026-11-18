@@ -235,7 +235,7 @@ def main() -> None:
     parser.add_argument("--hours-zh", type=float, default=10)
     parser.add_argument("--hours-en", type=float, default=10)
     parser.add_argument("--tts-device", choices=("cpu", "cuda"), default="cuda")
-    parser.add_argument("--draft-mode", choices=("direct", "interactive"), default="direct")
+    parser.add_argument("--draft-mode", choices=("direct", "interactive", "roleplay"), default="direct")
     parser.add_argument("--workers", type=int, choices=(1, 2), default=1)
     parser.add_argument("--upload-timeout-seconds", type=int, default=7200,
                         help="maximum time for one upload batch or unresponsive scan; default 2 hours")
