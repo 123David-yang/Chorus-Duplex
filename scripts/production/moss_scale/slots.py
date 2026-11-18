@@ -21,13 +21,13 @@ SIDE_TALK_SITUATIONS = (
 )
 
 RESUME_CUES = (
-    "想不起一个准确的名称，先卡住，随后想起来或用具体描述绕过去。",
-    "想不起一个时间、数字或地点，停下来回想，确认后补出它。",
-    "一个词刚说出口就意识到讲错了，停顿后明确改正。",
-    "说到一个暂时拿不定的选择时卡住，想清楚后由同一人说出决定。",
-    "想给出一个需要心算的时间或数量，说到计算的关键处停一下，再给出结果。",
-    "说到一半发现前提漏了，停顿后把条件补上，再接回原本要说的事。",
-    "一句话还没说完就发现说法不合适，停顿后用更准确或更委婉的话重新表达。",
+    "想不起准确名称：第一段只描述特征并停在‘那个叫……’一类待补位置，不先说出名称；第二段先给出名称。",
+    "回想时间或地点：第一段停在尚未说出的时间或地点之前；第二段先补出该时间或地点，再解释。",
+    "说错后改口：第一段在错误词语尚未说完整时停住；第二段明确改用正确词语，不先完整宣布一个结论。",
+    "拿不定选择：第一段说到‘我比较想选……’一类尚未给出答案的位置；第二段先给出自己的选择。",
+    "需要心算数量：第一段停在‘算下来需要……’一类尚未给出数值的位置；第二段先给结果，再补说明。",
+    "补充前提：第一段只开启一个尚未说完整的条件分句；第二段先补完条件，再说后续安排。",
+    "寻找准确措辞：第一段停在待补的具体对象或描述之前；第二段先补出对象或描述，而不是重述一件已说完的事。",
 )
 HESITATION_FILLERS = ("呃", "那个，那个", "嗯", "我想一下", "让我想想", "等我想想")
 TRANSITION_PIVOT_GROUPS = (
@@ -223,6 +223,8 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
         "form=handoff 的台词也必须在没说完的位置以省略号或破折号收尾。"
         "不要在普通逗号、已经完整的陈述后机械切开，不要在停顿后另起不相关的问题。"
         "自然例子：[‘我能赶上的最晚一班是……’,‘哦对，七点四十那班。’]。"
+        "反例：‘我去拿箱子，等我想想……’已经说完行动，不能仅加填充词就当未完成；应在‘我去拿那个……’之后再补具体物品。不要在第一段先给出第二段才想起的答案。"
+        "除非是有意改口，第二段从缺失成分本身直接续接，不要重新起一句来重复同一意图。"
         "transition 第一段只写短附和，第二段用该轮指定的开场词，转折词只说一次。"
         "带 fixed_text 的轮次必须逐字使用给定台词，不能改变这些选项。"
         "写作提示是给作者的上下文，不要将提示或规则本身照读成对话。"
@@ -270,6 +272,8 @@ def draft_from_slots(slots, users, context, mode, seeds, language="zh"):
             "acknowledgement and puts the requested English pivot only in the second part. "
             "For a hesitation, make the first clause sound plausible if the listener stops hearing it midway. "
             "Include an unfinished thought before the filler; a filler alone is not an incomplete sentence. "
+            "A resume must leave a specific value, object, name, location or condition unsaid; part two first supplies that missing piece. A completed action followed by 'give me a second' is not enough, and do not reveal the answer before the hesitation. "
+            "Unless deliberately correcting yourself, start part two directly with the missing word or phrase rather than restarting the whole clause. "
             "Attribute each stated restriction to its speaker: refer to the other person when recalling theirs, "
             "while allowing people to introduce their own new constraints. Distinguish added sugar from total sugar or carbohydrates, "
             "and check device connectors before assuming compatibility. Don't call toasting no preparation. "

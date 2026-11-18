@@ -3,6 +3,12 @@
 The production runner accepts `--draft-mode direct`, `interactive`, or `roleplay`.
 All modes use the same planned event relationships and delivery schema.
 
+For an incomplete turn with self-resumption, the first part should leave a specific
+name, time, place, quantity, object, choice or condition unresolved. The resumed part
+supplies that missing information; filler after an already completed action is not
+enough. These writing constraints use the existing generation call and do not prove
+semantic quality automatically. Deliberate self-correction may restart the phrase.
+
 | Mode | Writing strategy | LLM calls per successful draft attempt |
 |---|---|---|
 | `direct` (default) | Write the complete planned dialogue | 1 |
