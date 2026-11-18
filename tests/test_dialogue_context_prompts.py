@@ -69,6 +69,11 @@ class DialogueContextPromptTests(unittest.TestCase):
                         aside = next(i for i, slot in enumerate(slots)
                                      if slot["kind"] == "side_talk")
                         resume = aside + 2
+                        if slots[aside].get('side_talk_entry') == 'unsolicited':
+                            expected_main = aside - 1
+                        else:
+                            expected_main = next(i for i in range(aside-2,-1,-1) if slots[i]['kind'] != 'backchannel')
+                        self.assertEqual(slots[resume]['responds_to'], [expected_main])
                         requests = []
 
                         def fake_chat(system, user, **kwargs):

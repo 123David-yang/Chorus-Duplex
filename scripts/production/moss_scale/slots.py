@@ -92,8 +92,10 @@ def plan_slots(users, events, group, repeat, group_interrupt, transition, handof
             for speaker in speakers:
                 add(speaker, "assistant", "backchannel", [host], "四到十字的短认同，只回应助手已说完的前段，不用单独的“嗯嗯”。")
         elif event == "side_talk":
+            main_ref = next(i for i in range(len(slots)-1, -1, -1) if slots[i]["kind"] != "backchannel")
             if rng.random() < .5:
-                start = add(listener, "all", refs=[len(slots)-1], cue="继续主线，说一个具体安排。")
+                start = add(listener, "all", refs=[main_ref], cue="继续主线，说一个具体安排。")
+                main_ref = start
                 situation = rng.choice(SIDE_TALK_SITUATIONS)
                 aside = add("third_party_01", listener, "side_talk", (),
                             f"第三方突然开口。情境是{situation}，说一句具体的短话，与主线无关。")
@@ -102,7 +104,7 @@ def plan_slots(users, events, group, repeat, group_interrupt, transition, handof
                 start = add(listener, "third_party_01", cue="突然有门外或身边的第三方，转向对方说一句具体的事。")
                 aside = add("third_party_01", listener, "side_talk", [start], "第三方回一句，本轮独立于主话题。")
             add(listener, "third_party_01", refs=[aside], cue="短暂回应第三方。")
-            resume = add(listener, "assistant", refs=[opening], cue="直接延续插话前尚未解决的具体细节，不必宣布‘回到刚才’或复述开场问题；提到别人的限制时说清是谁。")
+            resume = add(listener, "assistant", refs=[main_ref], cue="直接延续插话前尚未解决的具体细节，不必宣布‘回到刚才’或复述开场问题；提到别人的限制时说清是谁。")
             add("assistant", listener, refs=[resume], cue="继续主线。")
         elif event == "incomplete":
             fillers = ("uh", "um", "let me think", "give me a second") if language == "en" else HESITATION_FILLERS
