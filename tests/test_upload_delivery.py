@@ -261,6 +261,30 @@ class DeliveryUploadTests(unittest.TestCase):
         self.assertNotIn("signature", str(cm.exception))
         self.assertNotIn("example.invalid", str(cm.exception))
 
+    def test_commit_failure_reports_stage_without_remote_text_and_resets_context(self):
+        from scripts.production.moss_scale.upload_delivery import publish
+        class Api:
+            def __init__(self, **kwargs):pass
+            def repo_info(self,*args,**kwargs):return SimpleNamespace(sha='head')
+            def get_paths_info(self,*args,**kwargs):return []
+            def create_commit(self,*args,**kwargs):
+                raise ConnectionError('https://private.invalid/?token=sensitive-marker')
+        hub=SimpleNamespace(HfApi=Api,CommitOperationAdd=lambda **kwargs:SimpleNamespace(**kwargs),
+                            hf_hub_download=lambda *args,**kwargs:None)
+        with patch.dict(sys.modules,{'huggingface_hub':hub}), \
+             patch('scripts.production.moss_scale.upload_delivery._hf_token',return_value='synthetic-token'):
+            with self.assertRaises(RuntimeError) as failure:
+                publish(self.root,'example/dataset',[self.ident],True)
+            message=str(failure.exception)
+            self.assertIn('stage=commit',message)
+            self.assertIn('retryable',message)
+            self.assertNotIn('sensitive-marker',message)
+            self.assertNotIn('private.invalid',message)
+            with self.assertRaises(RuntimeError) as next_failure:
+                publish(self.root,'invalid',[self.ident],True)
+            self.assertIn('stage=validation',str(next_failure.exception))
+            self.assertNotIn('stage=commit',str(next_failure.exception))
+
     def test_publish_does_not_emit_upstream_warning_content(self):
         from scripts.production.moss_scale.upload_delivery import publish
         def failing(*args, **kwargs):

@@ -3,6 +3,8 @@
 Credentials come from the Hugging Face SDK, never from command-line arguments.
 The existing annotations file is preserved and updated with an optimistic
 parent-commit guard. Repeating an already completed upload is safe.
+Errors retain a fixed publication stage, exception class and optional HTTP status,
+without exposing the upstream exception message or changing the retry policy.
 """
 from __future__ import annotations
 
@@ -18,6 +20,7 @@ import re
 import sys
 import urllib.error
 import warnings
+from contextvars import ContextVar
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -48,6 +51,7 @@ def _matches_remote(info, payload: Path | bytes) -> bool:
 
 
 MAX_BATCH_BYTES = 256 * 1024 * 1024
+_PUBLICATION_STAGE = ContextVar("publication_stage", default="validation")
 
 _SENSITIVE_FIELD = re.compile(
     r"(?i)^(?:token|.*api[_-]?key|.*(?:password|secret|access[_-]?token|refresh[_-]?token|"
@@ -219,16 +223,21 @@ def _publish(root: Path, repo: str, ids: list[str], execute: bool = False,
     if not execute:
         return {"status": "validated_locally", "samples": len(ids), "files": len(artifacts),
                 "repo": repo, "ids": ids}
+    _PUBLICATION_STAGE.set("credentials")
     token = _hf_token()
     api = HfApi(token=token)
+    _PUBLICATION_STAGE.set("repository")
     head = api.repo_info(repo, repo_type="dataset").sha
+    _PUBLICATION_STAGE.set("index_metadata")
     index_info = api.get_paths_info(repo, ["annotations.jsonl"], revision=head, repo_type="dataset")
     if index_info:
+        _PUBLICATION_STAGE.set("index_download")
         index_path = Path(hf_hub_download(repo, "annotations.jsonl", repo_type="dataset",
                                          revision=head, token=token))
         original = index_path.read_bytes()
     else:
         original = b""  # An initialized dataset may not have an annotation index yet.
+    _PUBLICATION_STAGE.set("index_merge")
     existing = {}
     for line in original.splitlines():
         row = json.loads(line)
@@ -248,8 +257,10 @@ def _publish(root: Path, repo: str, ids: list[str], execute: bool = False,
         original += b"".join((json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
                              for row in additions)
         artifacts["annotations.jsonl"] = original
+    _PUBLICATION_STAGE.set("artifact_metadata")
     paths_info = api.get_paths_info(repo, list(artifacts), revision=head, repo_type="dataset")
     remote = {item.path: item for item in paths_info}
+    _PUBLICATION_STAGE.set("operation_build")
     ops = []
     for path, payload in artifacts.items():
         if path == "annotations.jsonl":
@@ -261,10 +272,13 @@ def _publish(root: Path, repo: str, ids: list[str], execute: bool = False,
             ops.append(CommitOperationAdd(path_in_repo=path,
                        path_or_fileobj=payload))
     if ops:
+        _PUBLICATION_STAGE.set("commit")
         head = api.create_commit(repo, repo_type="dataset", parent_commit=head, operations=ops,
                                  commit_message=f"Add {len(ids)} validated duplex samples").oid
+    _PUBLICATION_STAGE.set("verification_metadata")
     verified = {item.path: item for item in
                 api.get_paths_info(repo, list(artifacts), revision=head, repo_type="dataset")}
+    _PUBLICATION_STAGE.set("verification_content")
     for path, payload in artifacts.items():
         if path not in verified or not _matches_remote(verified[path], payload):
             raise RuntimeError(f"Remote verification failed: {path}")
@@ -278,6 +292,7 @@ def publish(root: Path, repo: str, ids: list[str], execute: bool = False,
     """Publish via a sanitized boundary, including when called from Python."""
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     previous_disable = logging.root.manager.disable
+    stage_token = _PUBLICATION_STAGE.set("validation")
     logging.disable(logging.CRITICAL)
     try:
         with warnings.catch_warnings():
@@ -285,7 +300,8 @@ def publish(root: Path, repo: str, ids: list[str], execute: bool = False,
             return _publish(root, repo, ids, execute, expected_receipt_hashes)
     except Exception as exc:
         status = getattr(getattr(exc, "response", None), "status_code", None)
-        suffix = f", HTTP {status}" if isinstance(status, int) else ""
+        suffix = f", stage={_PUBLICATION_STAGE.get()}"
+        suffix += f", HTTP {status}" if isinstance(status, int) else ""
         transient = isinstance(exc, (ConnectionError, TimeoutError, http.client.IncompleteRead, urllib.error.URLError))
         try:
             import httpx
@@ -297,6 +313,7 @@ def publish(root: Path, repo: str, ids: list[str], execute: bool = False,
             suffix += ", retryable"
         raise RuntimeError(f"Publication failed ({type(exc).__name__}{suffix})") from None
     finally:
+        _PUBLICATION_STAGE.reset(stage_token)
         logging.disable(previous_disable)
 
 
