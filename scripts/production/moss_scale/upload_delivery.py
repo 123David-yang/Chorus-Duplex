@@ -3,8 +3,10 @@
 Credentials come from the Hugging Face SDK, never from command-line arguments.
 The existing annotations file is preserved and updated with an optimistic
 parent-commit guard. Repeating an already completed upload is safe.
-Errors retain a fixed publication stage, exception class and optional HTTP status,
-without exposing the upstream exception message or changing the retry policy.
+Errors retain a fixed publication stage, exception class and optional HTTP status
+without exposing upstream exception messages. Known transport retry markers remain.
+Hash-pinned streaming batches may reconcile once after an unclassified commit
+RuntimeError; reconciliation re-reads the remote head before considering a write.
 """
 from __future__ import annotations
 
@@ -297,7 +299,21 @@ def publish(root: Path, repo: str, ids: list[str], execute: bool = False,
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            return _publish(root, repo, ids, execute, expected_receipt_hashes)
+            frozen_ids = list(ids)
+            frozen_hashes = dict(expected_receipt_hashes) if expected_receipt_hashes is not None else None
+            for attempt in range(2):
+                _PUBLICATION_STAGE.set("validation")
+                try:
+                    return _publish(root, repo, frozen_ids, execute, frozen_hashes)
+                except RuntimeError as error:
+                    if (attempt == 0 and execute and frozen_hashes is not None
+                            and type(error) is RuntimeError and _PUBLICATION_STAGE.get() == "commit"
+                            and getattr(error, "response", None) is None):
+                        # Re-enter the ordinary idempotent path: validate frozen receipt
+                        # hashes, query current head/index/artifacts, then only add missing
+                        # content. A committed-but-lost response causes no second commit.
+                        continue
+                    raise
     except Exception as exc:
         status = getattr(getattr(exc, "response", None), "status_code", None)
         suffix = f", stage={_PUBLICATION_STAGE.get()}"

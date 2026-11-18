@@ -298,7 +298,32 @@ class DeliveryUploadTests(unittest.TestCase):
         self.assertNotIn("private", str(cm.exception))
         self.assertIn("retryable", str(cm.exception))
 
+    def test_unclassified_recovery_is_bounded_and_requires_pinned_commit(self):
+        from scripts.production.moss_scale import upload_delivery as uploader
+        for stage,pinned,http_status,expected_calls in (
+            ('commit',True,None,2),('verification_content',True,None,1),
+            ('commit',False,None,1),('commit',True,403,1)):
+            with self.subTest(stage=stage,pinned=pinned,http_status=http_status):
+                def failing(*args,**kwargs):
+                    uploader._PUBLICATION_STAGE.set(stage)
+                    error=RuntimeError('private-signature-marker')
+                    if http_status is not None:error.response=SimpleNamespace(status_code=http_status)
+                    raise error
+                with patch.object(uploader,'_publish',side_effect=failing) as publish:
+                    with self.assertRaises(RuntimeError) as failure:
+                        uploader.publish(self.root,'example/dataset',[self.ident],True,
+                            expected_receipt_hashes={self.ident:'a'*64} if pinned else None)
+                self.assertEqual(publish.call_count,expected_calls)
+                self.assertNotIn('private-signature-marker',str(failure.exception))
+                self.assertNotIn('retryable',str(failure.exception))
+
     def test_stream_resume_after_remote_commit_response_is_lost(self):
+        self._stream_resume_after_lost_response(ConnectionError)
+
+    def test_unclassified_commit_failure_reconciles_without_duplicate_commit(self):
+        self._stream_resume_after_lost_response(RuntimeError)
+
+    def _stream_resume_after_lost_response(self, error_type):
         from scripts.production.moss_scale.stream_upload import main, pending_receipts
         from scripts.production.moss_scale.produce_and_upload import _verified_hours
         state = self.root / "upload-state"
@@ -334,7 +359,7 @@ class DeliveryUploadTests(unittest.TestCase):
                     remote[op.path] = op.payload
                 revisions.append(parent_commit)
                 if len(revisions) == 1:
-                    raise ConnectionError("response lost after commit")
+                    raise error_type("response lost after commit")
                 return SimpleNamespace(oid=f"head-{len(revisions)}")
 
         def download(*args, **kwargs):
