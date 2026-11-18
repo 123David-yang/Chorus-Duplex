@@ -145,6 +145,7 @@ def main():
     parser.add_argument("--language", choices=("zh", "en"), default="zh")
     parser.add_argument("--tts-backend", help="moss_onnx, qwen3, kokoro, or module:factory")
     parser.add_argument("--tts-device", help="cpu or cuda (CUDA support depends on backend)")
+    parser.add_argument("--bind-moss-model", action="store_true", help="bind a new MOSS root to model contents; never backfill existing audio")
     parser.add_argument("--check", action="store_true", help="validate local inputs without generation or API calls")
     args=parser.parse_args()
     if not math.isfinite(args.hours) or args.hours < 0:
@@ -160,6 +161,8 @@ def main():
     root = args.root or (default_root.with_name(default_root.name + "_en")
                         if args.language == "en" else default_root)
     os.environ["TTS_BACKEND"] = args.tts_backend or os.environ.get("TTS_BACKEND", "moss_onnx")
+    if args.bind_moss_model and os.environ["TTS_BACKEND"] != "moss_onnx":
+        parser.error("--bind-moss-model requires moss_onnx")
     os.environ.update(TTS_STRICT="1", MOSS_TEXT_LANGUAGE=args.language)
     if args.tts_device is not None:
         os.environ["TTS_DEVICE"] = args.tts_device
@@ -197,6 +200,10 @@ def main():
             os.environ.pop("CHORUS_RUN_TAG", None)
         dedupe_db = Path(os.environ["CHORUS_DEDUPE_DB"]) if os.environ.get("CHORUS_DEDUPE_DB") else None
         production_backend = None
+        moss_binding = None
+        if os.environ["TTS_BACKEND"] == "moss_onnx" and (args.bind_moss_model or (root / "model-lock.json").exists() or (root / "model-lock.json").is_symlink()):
+            from .moss_binding import prepare_moss_models
+            moss_binding = prepare_moss_models(root)
         if os.environ["TTS_BACKEND"] == "qwen3":
             for receipt_path in (root / "completed").glob("*.json"):
                 profile = json.loads(receipt_path.read_text(encoding="utf-8"))["annotation"].get("profile", {})
@@ -230,6 +237,9 @@ def main():
         if stop_requested():
             return
         synth=FastSynth(root/"staging")
+        if moss_binding is not None:
+            from .moss_binding import verify_loaded_moss
+            verify_loaded_moss(synth.backend, *moss_binding)
         if os.environ["TTS_BACKEND"] == "qwen3":
             from scripts.text.voices import reference_voices
             synth.backend = production_backend

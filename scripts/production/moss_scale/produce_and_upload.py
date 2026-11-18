@@ -299,12 +299,17 @@ def main() -> None:
         _clear_owned_stops(roots)
         if any((root / name).exists() for root in roots.values() for name in ("STOP", ".chorus-coordinator-stop")):
             parser.error("A producer STOP file exists; resolve it before resuming")
-        env = os.environ.copy()
-        env["TTS_BACKEND"] = "moss_onnx"
         from .deduplicate import rebuild as rebuild_deduplication
+        from .moss_binding import prepare_moss_models
         dedupe_db = control / "clean-hashes.sqlite3"
         with ProductionLock(roots["zh"]), ProductionLock(roots["en"]):
+            _, zh_identity = prepare_moss_models(roots["zh"])
+            _, en_identity = prepare_moss_models(roots["en"])
+            if zh_identity != en_identity:
+                raise ValueError("MOSS model changed between language root checks")
             rebuild_deduplication(dedupe_db, list(roots.values()))
+        env = os.environ.copy()
+        env["TTS_BACKEND"] = "moss_onnx"
         env["CHORUS_DEDUPE_DB"] = str(dedupe_db)
         env.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
         state = control / "upload-state"
@@ -347,7 +352,7 @@ def main() -> None:
                         language = queue.pop(0)
                         command = [sys.executable, "-m", "scripts.production.scale_moss", "--root", str(roots[language]),
                                    "--hours", str(targets[language]), "--language", language, "--run-tag", tag,
-                                   "--tts-backend", "moss_onnx", "--tts-device", args.tts_device,
+                                   "--tts-backend", "moss_onnx", "--tts-device", args.tts_device, "--bind-moss-model",
                                    "--draft-mode", args.draft_mode]
                         active[language] = owned.popen(command, cwd=ROOT, env=env, stdout=logs[language],
                                                        stderr=subprocess.STDOUT)

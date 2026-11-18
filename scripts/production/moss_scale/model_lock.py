@@ -14,24 +14,30 @@ def _reject_link(path):
         raise ValueError("Linked model-lock path is not allowed")
 
 
-def bind_models(root, identities):
+def bind_models(root, identities, *, backend="qwen3"):
     root = Path(root).absolute()
     for directory in (root, *root.parents):
         _reject_link(directory)
-    if not isinstance(identities, dict) or set(identities) not in ({"preset"}, {"preset", "clone"}):
+    roles = ({"preset"}, {"preset", "clone"}) if backend == "qwen3" else ({"model"},)
+    if backend not in {"qwen3", "moss_onnx"} or not isinstance(identities, dict) or set(identities) not in roles:
         raise ValueError("Invalid model roles")
     safe = {}
     for role, identity in identities.items():
         if not isinstance(identity, dict):
             raise ValueError("Invalid model identity")
         digest = identity.get("sha256")
-        expected = "custom_voice" if role == "preset" else "base"
-        if (identity.get("algorithm") != "qwen3-snapshot-sha256-v1"
-                or identity.get("tts_model_type") != expected
-                or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
             raise ValueError("Invalid model identity")
-        safe[role] = {"sha256": digest, "tts_model_type": expected}
-    payload = {"schema_version": 1, "backend": "qwen3", "verification": "content-continuity-only", "models": safe}
+        if backend == "qwen3":
+            expected = "custom_voice" if role == "preset" else "base"
+            if identity.get("algorithm") != "qwen3-snapshot-sha256-v1" or identity.get("tts_model_type") != expected:
+                raise ValueError("Invalid model identity")
+            safe[role] = {"sha256": digest, "tts_model_type": expected}
+        else:
+            if identity.get("algorithm") != "moss-onnx-assets-sha256-v1":
+                raise ValueError("Invalid model identity")
+            safe[role] = {"sha256": digest, "algorithm": identity["algorithm"]}
+    payload = {"schema_version": 1, "backend": backend, "verification": "content-continuity-only", "models": safe}
     path = root / "model-lock.json"
     if path.exists() or path.is_symlink():
         _reject_link(path)
